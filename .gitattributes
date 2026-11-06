@@ -1,0 +1,3 @@
+# Windows PowerShell 5.1 a Inno Setup potřebují UTF-8 s BOM (BOM je přímo v souborech) a CRLF
+*.ps1 -text
+*.iss -text

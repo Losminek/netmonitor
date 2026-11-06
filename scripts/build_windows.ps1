@@ -1,4 +1,4 @@
-<#
+﻿<#
   NetMonitor – sestavení pro Windows 10/11 x64
   Spuštění (PowerShell v kořeni projektu):
       powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1

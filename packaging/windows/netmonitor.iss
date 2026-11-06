@@ -1,4 +1,4 @@
-; Inno Setup 6 – instalátor NetMonitoru (bez administrátorských práv, do profilu uživatele)
+﻿; Inno Setup 6 – instalátor NetMonitoru (bez administrátorských práv, do profilu uživatele)
 ; Sestavení:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\netmonitor.iss
 ; (build_windows.ps1 to udělá automaticky, pokud je Inno Setup nainstalovaný)
 

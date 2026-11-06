@@ -1,4 +1,4 @@
-<#
+﻿<#
   Spuštění NetMonitoru ze zdrojů na Windows (bez sestavení EXE) – pro rychlé ověření.
       powershell -ExecutionPolicy Bypass -File scripts\run_dev.ps1              # widget
       powershell -ExecutionPolicy Bypass -File scripts\run_dev.ps1 -Diagnose    # textová diagnostika
