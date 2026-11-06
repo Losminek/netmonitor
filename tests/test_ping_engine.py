@@ -116,7 +116,9 @@ def test_ping_host_never_raises():
 # --- skutečné ICMP (integrační; přeskočí se, kde to prostředí nedovolí) -----------
 
 def _real_pinger():
-    p = SocketIcmpPinger.probe() if sys.platform != "win32" else None
+    if sys.platform == "win32":
+        return select_pinger()          # nativní IcmpSendEcho – ověřuje skutečnou Windows cestu
+    p = SocketIcmpPinger.probe()
     if p:
         return p
     if shutil.which("ping"):
@@ -144,3 +146,9 @@ def test_select_pinger_works():
     p = select_pinger()
     r = p.ping("127.0.0.1", 1.0)
     assert isinstance(r, PingResult)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "win32", reason="jen Windows")
+def test_windows_native_pinger_selected():
+    assert select_pinger().name == "win-icmpapi"
