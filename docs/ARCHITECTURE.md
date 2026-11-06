@@ -1,0 +1,63 @@
+# Architektura
+
+```
+src/netmonitor/
+├── main.py                 vstup, argumenty, single-instance zámek, sestavení aplikace
+├── core/                   čistý Python BEZ Qt – plně testovatelné
+│   ├── config.py           dataclassy konfigurace, validace, JSON (atomický zápis), import/export, migrace
+│   ├── ping_engine.py      ICMP: Windows IcmpSendEcho / ICMP socket / systémový ping; DNS resolver s cache
+│   ├── monitoring.py       plánovač (monotonic, fixed-rate), ThreadPool, statistiky, přechody UP/DOWN
+│   ├── connection_status.py vyhodnocení ONLINE/DEGRADED/OFFLINE/UNKNOWN po vrstvách
+│   ├── network_info.py     aktivní rozhraní (výchozí trasa), LAN IP, brána, rychlost linky, Wi-Fi, DNS
+│   ├── wan_info.py         WAN IPv4 (4 poskytovatelé s fallbackem), ISP (ipinfo / RIPEstat), cache, změny
+│   ├── history.py          SQLite (WAL), minutové agregace, dávkový zápis, události, migrace, CSV export
+│   └── notifier.py         logika upozornění: prodleva, cooldown, bez zahlcení
+├── platform/               OS-specifické adaptéry
+│   ├── windows.py          GetAdaptersAddresses (ctypes), netsh wlan, HKCU\…\Run, HWND_BOTTOM
+│   ├── linux.py            /proc/net/route, resolvectl/nmcli/resolv.conf, nmcli/iw, XDG autostart
+│   └── macos.py            route/scutil/ipconfig, LaunchAgent
+├── gui/                    PySide6
+│   ├── controller.py       most jádro ↔ Qt: úlohy na pozadí, queued signály, ukládání konfigurace
+│   ├── main_widget.py      průhledné okno, režimy, přesun/zámek/velikost, kontextové menu
+│   ├── network_panel.py    horní část (síťové informace)
+│   ├── ping_panel.py       dolní část (řádky cílů – každý se překresluje samostatně)
+│   ├── settings_dialog.py  nastavení (6 záložek), živé promítání změn
+│   ├── history_dialog.py   graf, statistiky, události, export CSV
+│   ├── tray.py             ikona v oznamovací oblasti, notifikace
+│   ├── theme.py · widgets.py · icons.py · i18n.py
+└── resources/              písma (OFL), ikony
+```
+
+## Vlákna a tok dat
+
+```
+ Qt hlavní vlákno (UI)  ◄── queued Signal ──┐
+                                            │
+ ping-scheduler (1 vlákno) ── submit ──► ThreadPool "ping-*" (max_concurrent, výchozí 16)
+        │  heap (due, target)                 │ ping_host(): resolver → pinger (blokuje max. timeout)
+        │  monotonic clock                    ▼
+        │                               TargetStats.add() pod zámkem → snapshot → callback
+ ThreadPool "bg-*" (3)  ← síťové info (každých 5 s), WAN/ISP (5 min), flush DB (60 s), zápis konfigurace
+```
+
+- **Žádná síťová ani disková operace na hlavním vlákně.**
+- **Žádné překrývání** požadavků na stejný cíl (`_inflight`), žádná dávka "dohánění" po zpoždění.
+- **Uspání/probuzení**: skok wall-clock vs. monotonic → vymazání DNS cache, přeplánování, obnovení WAN/sítě.
+- **Změna sítě** (rozhraní/IP/brána/DNS/SSID) → totéž + přepnutí sondy brány.
+- **Ukončení**: zastavení časovačů → `engine.stop()` (join plánovače, `executor.shutdown(wait, cancel_futures)`)
+  → flush historie → zavření DB. Systémový ping používá `subprocess.run(timeout)` → žádné zombie procesy.
+
+## Vyhodnocení stavu připojení
+
+1. Rozhraní bez IP / bez výchozí trasy → **OFFLINE**
+2. Internetové cíle = veřejné adresy (lze přepsat u cíle). Všechny dole a ≥ 2 cíle → **OFFLINE**;
+   jen jeden cíl → **DEGRADED** (výpadek nelze potvrdit); ICMP mlčí, ale HTTPS (WAN dotaz) funguje → **DEGRADED**
+3. ≥ 1/3 internetových cílů dole, medián latence > oranžový práh, medián ztrátovosti ≥ 20 % → **DEGRADED**
+4. Jinak **ONLINE**. Brána neodpovídající na ping (časté blokování ICMP) online stav nekazí.
+
+## Historie
+
+Ping každé 2 s × 10 cílů = 432 000 vzorků/den. Místo toho se ukládá **1 řádek / cíl / minuta**
+(min, avg, max, OK, FAIL, poslední stav a chyba) jedním dávkovým UPSERTem za minutu → ~14 400 řádků/den.
+Graf „1 hodina“ používá surové vzorky z paměťového ring-bufferu. Události (výpadek, obnovení, změna WAN,
+internet) jsou v samostatné tabulce a zapisují se okamžitě.

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=NetMonitor
+GenericName=Síťový monitor
+Comment=Widget s informacemi o síti a monitoringem dostupnosti
+Exec=NetMonitor
+Icon=netmonitor
+Terminal=false
+Categories=Network;Monitor;Utility;
+Keywords=ping;network;wan;dns;monitor;
+StartupNotify=false

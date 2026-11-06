@@ -1,0 +1,15 @@
+        SÍŤOVÉ INFORMACE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WAN IP : <veřejná IPv4>     LAN : ONLINE | DEGRADED | OFFLINE | UNKNOWN
+ISP    : <ASN + název poskytovatele>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Wireless|Ethernet|VPN : <rozhraní>   LAN IP : <IPv4>
+Speed  : <linková rychlost>          GW     : <výchozí brána>
+SSID   : <jen u Wi-Fi> (signál %)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IP4.DNS[1] : <DNS>
+IP4.DNS[2] : <DNS>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                PING
+<ikona> <název>   <IP/doména>   <RTT ms | OK | TIMEOUT | UNREACH | DNS ERR>
+…

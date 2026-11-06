@@ -1,0 +1,85 @@
+"""macOS: brána přes `route -n get default`, DNS přes `scutil --dns`, Wi-Fi přes `ipconfig getsummary`,
+autostart přes LaunchAgent v ~/Library/LaunchAgents.
+
+Pozn.: macOS 14.4+ skrývá SSID ("<redacted>") aplikacím bez oprávnění k poloze –
+v takovém případě se zobrazí N/A.
+"""
+from __future__ import annotations
+
+import plistlib
+import re
+from pathlib import Path
+
+from ..utils.proc import run_cmd
+
+LAUNCH_AGENT = Path.home() / "Library" / "LaunchAgents" / "eu.zelina.netmonitor.plist"
+
+
+def default_gateway(iface: str | None = None) -> tuple[str | None, str | None]:
+    out = run_cmd(["route", "-n", "get", "default"], timeout=2) or ""
+    gw = re.search(r"gateway:\s*(\S+)", out)
+    itf = re.search(r"interface:\s*(\S+)", out)
+    g, i = (gw.group(1) if gw else None), (itf.group(1) if itf else None)
+    if iface and i and iface != i:
+        return None, i
+    return g, i
+
+
+def parse_scutil_dns(text: str, iface: str | None) -> list[str]:
+    """Preferuje 'scoped' resolver pro dané rozhraní, jinak resolver #1."""
+    main, _, scoped_part = text.partition("DNS configuration (for scoped queries)")
+    if iface:
+        for sec in re.split(r"\n(?=resolver #\d+)", scoped_part):
+            if re.search(rf"if_index\s*:\s*\d+\s*\({re.escape(iface)}\)", sec):
+                ns = re.findall(r"nameserver\[\d+\]\s*:\s*(\S+)", sec)
+                if ns:
+                    return ns
+    for sec in re.split(r"\n(?=resolver #\d+)", main):
+        ns = re.findall(r"nameserver\[\d+\]\s*:\s*(\S+)", sec)
+        if ns:
+            return ns
+    return []
+
+
+def dns_servers(iface: str | None) -> tuple[list[str], str]:
+    out = run_cmd(["scutil", "--dns"], timeout=3) or ""
+    dns = parse_scutil_dns(out, iface)
+    return dns, "zdroj: scutil --dns" if dns else "DNS nezjištěno"
+
+
+def wifi_info(iface: str) -> dict:
+    info: dict = {"ssid": None, "signal_pct": None, "signal_dbm": None, "rate_mbps": None, "note": ""}
+    out = run_cmd(["ipconfig", "getsummary", iface], timeout=3) or ""
+    m = re.search(r"^\s*SSID\s*:\s*(.+)$", out, re.M)
+    if m:
+        ssid = m.group(1).strip()
+        if "redacted" in ssid.lower():
+            info["note"] = "macOS skrývá SSID – udělte aplikaci oprávnění k poloze"
+        else:
+            info["ssid"] = ssid
+    return info
+
+
+def adapter_details() -> dict[str, dict]:
+    res = {}
+    out = run_cmd(["networksetup", "-listallhardwareports"], timeout=3) or ""
+    for port, dev in re.findall(r"Hardware Port:\s*(.+)\nDevice:\s*(\S+)", out):
+        pl = port.lower()
+        kind = "wifi" if "wi-fi" in pl or "airport" in pl else "ethernet" if "ethernet" in pl or "lan" in pl \
+            else "other"
+        res[dev] = {"kind": kind, "display_name": f"{dev} ({port})"}
+    return res
+
+
+def autostart_enabled() -> bool:
+    return LAUNCH_AGENT.exists()
+
+
+def set_autostart(enabled: bool, command: list[str]) -> None:
+    if not enabled:
+        LAUNCH_AGENT.unlink(missing_ok=True)
+        return
+    LAUNCH_AGENT.parent.mkdir(parents=True, exist_ok=True)
+    with open(LAUNCH_AGENT, "wb") as f:
+        plistlib.dump({"Label": "eu.zelina.netmonitor", "ProgramArguments": command,
+                       "RunAtLoad": True, "ProcessType": "Interactive"}, f)
