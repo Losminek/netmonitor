@@ -49,7 +49,8 @@ def diagnose(cfg: cfgmod.AppConfig) -> int:
     pinger = select_pinger()
     out["icmp"] = pinger.name
     r = Resolver()
-    out["ping"] = {f"{t.name} ({t.host})": (lambda res: {"status": res.status.value, "rtt_ms": res.rtt_ms,
+    out["ping"] = {f"{t.name} ({t.host})": (lambda res: {"status": res.status.value,
+                                                          "rtt_ms": round(res.rtt_ms, 2) if res.rtt_ms is not None else None,
                                                           "ip": res.address, "error": res.error})(
         ping_host(t.host, t.timeout_s, pinger, r)) for t in cfg.ping.targets if t.enabled}
     if cfg.network.external_api:

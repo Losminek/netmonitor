@@ -71,6 +71,16 @@ def route_source_ip(family: int = socket.AF_INET) -> str | None:
         return None
 
 
+PSUTIL_32BIT_OVERFLOW = 4294   # 0xFFFFFFFF b/s / 1e6 – psutil na Windows čte rychlost jako 32bit DWORD
+
+
+def _sane_speed(mbps) -> int | None:
+    """psutil: 0 = neznámé; 4294 = přetečení 32bit hodnoty (linky > 4,29 Gb/s, např. 10GbE) => neznámé."""
+    if not mbps or mbps <= 0 or mbps == PSUTIL_32BIT_OVERFLOW:
+        return None
+    return mbps
+
+
 def _psutil_interfaces() -> dict[str, dict]:
     addrs = psutil.net_if_addrs()
     stats = psutil.net_if_stats()
@@ -81,7 +91,7 @@ def _psutil_interfaces() -> dict[str, dict]:
         mac = next((a.address for a in lst if a.family == psutil.AF_LINK), "")
         st = stats.get(name)
         res[name] = {"ipv4": v4, "ipv6": v6, "mac": mac, "is_up": bool(st and st.isup),
-                     "speed": (st.speed if st and st.speed and st.speed > 0 else None)}
+                     "speed": _sane_speed(st.speed if st else None)}
     return res
 
 
@@ -136,7 +146,8 @@ class NetworkInfoProvider:
             dns_note = "zdroj: GetAdaptersAddresses" if dns else "DNS nezjištěno"
         else:
             dns, dns_note = self.p.dns_servers(name)
-        speed = d["speed"] or det.get("speed_mbps")
+        # Windows: 64bit ReceiveLinkSpeed z GetAdaptersAddresses má přednost (psutil přetéká u 10GbE)
+        speed = det.get("speed_mbps") or d["speed"]
         if speed is None and hasattr(self.p, "link_speed_sysfs"):
             speed = self.p.link_speed_sysfs(name)
         wifi = {}

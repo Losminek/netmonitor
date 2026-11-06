@@ -96,3 +96,18 @@ def test_scutil_dns():
     assert macos.parse_scutil_dns(SCUTIL, "utun3") == ["10.8.0.1"]
     assert macos.parse_scutil_dns(SCUTIL, None) == ["93.93.32.32", "93.93.33.33"]
     assert macos.parse_scutil_dns(SCUTIL, "en9") == ["93.93.32.32", "93.93.33.33"]
+
+
+def test_psutil_speed_overflow_is_unknown():
+    from netmonitor.core.network_info import _sane_speed
+    assert _sane_speed(4294) is None        # 10GbE na Windows přes psutil
+    assert _sane_speed(0) is None
+    assert _sane_speed(1000) == 1000
+
+
+def test_speed_format():
+    from netmonitor.gui.network_panel import fmt_speed
+    assert fmt_speed(10000) == "10 Gb/s"
+    assert fmt_speed(2500) == "2.5 Gb/s"
+    assert fmt_speed(200) == "200 Mb/s"
+    assert fmt_speed(None) == "N/A"
