@@ -27,7 +27,7 @@ skutečného displeje (Qt offscreen). Windows a macOS kód je napsán, ale **na 
 
 ## Otestováno (automaticky, Linux)
 
-127 testů (`pytest`): validace IPv4/IPv6/domén, konfigurace (load/save/clamp/migrace/import/export),
+130 testů (`pytest`; na Linuxu 128 proběhne, 2 jsou jen pro Windows): validace IPv4/IPv6/domén, konfigurace (load/save/clamp/migrace/import/export),
 parsování výstupu ping (Linux, Windows CZ/EN, macOS, unreachable s rc=0), bezpečné argumenty, úspěšný ping,
 timeout, nedostupný host, DNS chyba, packet loss, přechody ONLINE/OFFLINE, paralelismus (pomalý cíl neblokuje),
 žádné souběžné požadavky na jeden cíl, bezpečné ukončení bez zbylých vláken, historie (agregace, UPSERT,
