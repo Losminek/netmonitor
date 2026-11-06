@@ -20,6 +20,7 @@ from .widgets import GlowTitle
 
 log = logging.getLogger(__name__)
 BASE_W, BASE_H = 600, 850
+MIN_W, MIN_H = 260, 340
 
 
 class ResizeGrip(QWidget):
@@ -52,7 +53,7 @@ class ResizeGrip(QWidget):
     def mouseMoveEvent(self, e):
         if self._start is not None:
             d = e.globalPosition().toPoint() - self._start
-            self.owner.resize(max(360, self._start_size.width() + d.x()), max(360, self._start_size.height() + d.y()))
+            self.owner.resize(max(MIN_W, self._start_size.width() + d.x()), max(MIN_H, self._start_size.height() + d.y()))
 
     def mouseReleaseEvent(self, e):
         self._start = None
@@ -87,6 +88,7 @@ class MainWidget(QWidget):
         lay.addWidget(self.ping, 1)
         self._layout = lay
         self.grip = ResizeGrip(self)
+        self.setMinimumSize(MIN_W, MIN_H)
 
         self._geom_timer = QTimer(self, singleShot=True, interval=700, timeout=self.remember_geometry)
         self._bottom_timer = QTimer(self, singleShot=True, interval=50, timeout=self._push_to_bottom)
@@ -105,7 +107,7 @@ class MainWidget(QWidget):
     # ------------------------------------------------------------------ vzhled
     def _compute_scale(self) -> float:
         a = self.ctrl.cfg.appearance
-        return max(0.55, min(2.5, min(self.width() / BASE_W, self.height() / BASE_H * 1.15))) * a.font_scale
+        return max(0.4, min(2.5, min(self.width() / BASE_W, self.height() / BASE_H * 1.15))) * a.font_scale
 
     def apply_config(self, cfg: AppConfig, initial: bool = False) -> None:
         a = cfg.appearance
@@ -329,8 +331,9 @@ class MainWidget(QWidget):
             act.setChecked(abs(a.opacity - v) < 0.01)
             act.triggered.connect(lambda _=False, v=v: self._set_appearance(opacity=v))
         sz = m.addMenu(tr("Velikost"))
-        for label, (w, h) in ((tr("Kompaktní"), (460, 650)), (tr("Výchozí (600 × 850)"), (600, 850)),
-                              (tr("Velký"), (760, 1076))):
+        for label, (w, h) in ((tr("Mini (300 × 430)"), (300, 430)), (tr("Malý (380 × 540)"), (380, 540)),
+                              (tr("Kompaktní (460 × 650)"), (460, 650)), (tr("Výchozí (600 × 850)"), (600, 850)),
+                              (tr("Velký (760 × 1076)"), (760, 1076))):
             sz.addAction(label, lambda w=w, h=h: self.set_size(w, h))
         m.addSeparator()
         m.addAction(tr("Obnovit nyní"), self.refresh_now)

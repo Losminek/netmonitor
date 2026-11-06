@@ -20,7 +20,8 @@ class GlowTitle(QWidget):
         self._scale = 1.0
         self._cache: QPixmap | None = None
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
         self._update_height()
 
     def set_style(self, scale: float, neon: bool) -> None:
@@ -117,28 +118,65 @@ class NeonSeparator(QWidget):
 
 
 class ValueLabel(QLabel):
-    """Label, který překresluje jen při skutečné změně textu/barvy/tooltipu."""
+    """Label, který překresluje jen při skutečné změně a dlouhý text zkrátí "…"
+    (nevnucuje oknu minimální šířku – widget lze libovolně zmenšit)."""
 
     def __init__(self, text: str = "", color: QColor | str = theme.WHITE, parent=None):
         super().__init__(text, parent)
+        self._full = text
+        self._tip = ""
         self._color = QColor(color)
         self._apply_color()
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
 
     def _apply_color(self) -> None:
         self.setStyleSheet(f"color: {self._color.name()}; background: transparent;")
 
+    def minimumSizeHint(self):
+        return QSize(0, super().minimumSizeHint().height())
+
+    def full_text(self) -> str:
+        return self._full
+
+    def _refresh(self) -> None:
+        shown = QFontMetricsF(self.font()).elidedText(self._full, Qt.TextElideMode.ElideRight, max(0, self.width() - 2))
+        if shown != super().text():
+            super().setText(shown)
+        tip = self._tip
+        if shown != self._full:
+            tip = self._full + ("\n\n" + tip if tip else "")
+        if tip != self.toolTip():
+            self.setToolTip(tip)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._full = text
+        self._refresh()
+
+    def text(self) -> str:
+        return self._full
+
+    def setFont(self, f) -> None:  # noqa: N802
+        super().setFont(f)
+        self._refresh()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._refresh()
+
     def set_value(self, text: str, color: QColor | str | None = None, tooltip: str | None = None) -> None:
-        if text != self.text():
-            self.setText(text)
         if color is not None:
             c = QColor(color)
             if c != self._color:
                 self._color = c
                 self._apply_color()
-        if tooltip is not None and tooltip != self.toolTip():
-            self.setToolTip(tooltip)
+        if tooltip is not None:
+            self._tip = tooltip
+        if text != self._full or tooltip is not None:
+            self._full = text
+            self._refresh()
 
 
 def elide(text: str, font: QFont, width: float) -> str:

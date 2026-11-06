@@ -111,7 +111,7 @@ class NetworkPanel(QWidget):
         g.setVerticalSpacing(1)
         g.setColumnStretch(2, 10)
         g.setColumnMinimumWidth(3, 12)
-        g.setColumnStretch(6, 8)
+        g.setColumnStretch(6, 1)
         return g
 
     def _place(self, g: QGridLayout, row: int, r: _Row, col: int, span: int = 1) -> None:
@@ -142,6 +142,10 @@ class NetworkPanel(QWidget):
             (self.dns_rows, ["IP4.DNS[1]", "IP4.DNS[2]"]),
         ]
         colon_w = fm.horizontalAdvance(" : ")
+        # pravý sloupec (IP adresy, stav) má vždy místo na celou IPv4 – zkracuje se jen levý (ISP, název adaptéru)
+        ip_w = fm.horizontalAdvance("255.255.255.255") + 6
+        for r in (self.lanip, self.gw, self.lan):
+            r.value.setMinimumWidth(ip_w)
         for rows, texts in blocks:
             w = max(fm.horizontalAdvance(t) for t in texts) + 4
             for r in rows:

@@ -20,7 +20,7 @@ from ..utils.validation import host_kind
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CONFIG_FILENAME = "config.json"
 
 ICON_CHOICES = ("auto", "globe", "server", "dns", "wifi", "router", "modem", "box", "cloud")
@@ -112,7 +112,7 @@ class GeneralConfig:
 class AppearanceConfig:
     mode: str = MODE_DESKTOP
     opacity: float = 1.0          # průhlednost celého okna (text i panel)
-    glass_alpha: float = 0.55     # průhlednost skleněného pozadí panelu (0 = plně průhledné)
+    glass_alpha: float = 0.75     # krytí skleněného pozadí panelu (0 = plně průhledné)
     width: int = 600
     height: int = 850
     x: int | None = None
@@ -205,9 +205,9 @@ class AppConfig:
         a = self.appearance
         a.mode = a.mode if a.mode in (MODE_DESKTOP, MODE_ONTOP) else MODE_DESKTOP
         a.opacity = _clamp(a.opacity, 0.2, 1.0, 1.0)
-        a.glass_alpha = _clamp(a.glass_alpha, 0.0, 1.0, 0.55)
-        a.width = int(_clamp(a.width, 320, 2000, 600))
-        a.height = int(_clamp(a.height, 300, 2400, 850))
+        a.glass_alpha = _clamp(a.glass_alpha, 0.0, 1.0, 0.75)
+        a.width = int(_clamp(a.width, 260, 2000, 600))
+        a.height = int(_clamp(a.height, 340, 2400, 850))
         a.font_scale = _clamp(a.font_scale, 0.6, 2.0, 1.0)
         n = self.network
         n.wan_interval_s = int(_clamp(n.wan_interval_s, 30, 86400, 300))
@@ -286,7 +286,13 @@ def migrate_dict(data: dict) -> dict:
     ver = data.get("schema_version", 1)
     if not isinstance(ver, int) or ver < 1:
         ver = 1
-    # if ver < 2: ... budoucí migrace
+    if ver < 2:   # 1.0.1: lepší čitelnost na světlé tapetě – staré výchozí krytí skla 0.55 -> 0.75
+        ap = data.get("appearance")
+        if isinstance(ap, dict) and ap.get("glass_alpha") == 0.55:
+            ap["glass_alpha"] = 0.75
+        ping = data.get("general")
+        if isinstance(ping, dict) and not ping.get("update_url"):
+            ping.pop("update_url", None)          # doplní se nový výchozí odkaz na GitHub
     data["schema_version"] = SCHEMA_VERSION
     return data
 

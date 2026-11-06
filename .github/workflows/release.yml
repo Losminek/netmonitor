@@ -1,0 +1,80 @@
+# Sestavení a vydání NetMonitoru pro Windows, Linux a macOS (Intel i Apple Silicon).
+# Spouští se pushnutím tagu "v*" (např. git tag v1.0.1 && git push origin v1.0.1) nebo ručně (Actions → Run workflow).
+# Na každé platformě se před buildem spustí kompletní testy => ověření i na OS, které nemám lokálně.
+name: Build & Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: ubuntu-22.04          # starší glibc => běží i na Debian 12 / Ubuntu 22.04+
+            name: linux-x86_64
+          - os: macos-latest          # Apple Silicon
+            name: macos-arm64
+          - os: macos-15-intel        # Intel
+            name: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Linux – systémové knihovny Qt
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0 libgl1 iputils-ping
+
+      - name: Windows – Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup -y --no-progress
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        env: { QT_QPA_PLATFORM: offscreen }
+        run: ./scripts/build_linux.sh --deb
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        env: { QT_QPA_PLATFORM: offscreen }
+        run: ./scripts/build_macos.sh --dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netmonitor-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.dmg
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, merge-multiple: true }
+      - run: ls -la artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

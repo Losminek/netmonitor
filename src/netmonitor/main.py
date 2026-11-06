@@ -203,24 +203,43 @@ def _save_screenshot(widget, path: Path, bg: Path | None) -> None:
     out.save(str(path))
 
 
+def parse_update_info(data: dict) -> tuple[str, str] | None:
+    """Podporuje GitHub Releases API (tag_name/html_url) i vlastní JSON (version/url)."""
+    if not isinstance(data, dict):
+        return None
+    ver = str(data.get("tag_name") or data.get("version") or "").strip().lstrip("vV")
+    url = str(data.get("html_url") or data.get("url") or "")
+    return (ver, url) if ver else None
+
+
+def is_newer(latest: str, current: str = __version__) -> bool:
+    def key(v: str):
+        out = []
+        for part in v.split("."):
+            num = "".join(ch for ch in part if ch.isdigit())
+            out.append(int(num) if num else 0)
+        return tuple(out + [0] * (4 - len(out)))
+    try:
+        return key(latest) > key(current)
+    except ValueError:
+        return False
+
+
 def _check_update(ctrl, url: str, tray) -> None:
     if not url.startswith("https://"):
         return
 
     def job():
         from .core.wan_info import http_get
-        data = json.loads(http_get(url, 6))
-        return data
+        return json.loads(http_get(url, 8))
     from PySide6.QtWidgets import QSystemTrayIcon
 
     def done(data):
-        try:
-            latest = str(data.get("version", ""))
-            if latest and tuple(map(int, latest.split("."))) > tuple(map(int, __version__.split("."))):
-                tray.showMessage("NetMonitor", f"Je dostupná nová verze {latest}\n{data.get('url', '')}",
-                                 QSystemTrayIcon.MessageIcon.Information, 10000)
-        except (ValueError, AttributeError):
-            pass
+        info = parse_update_info(data)
+        if info and is_newer(info[0]):
+            log.info("Dostupná nová verze %s: %s", *info)
+            tray.showMessage("NetMonitor", f"Je dostupná nová verze {info[0]}\n{info[1]}",
+                             QSystemTrayIcon.MessageIcon.Information, 15000)
     ctrl._run_bg("update-check", job, done)
 
 

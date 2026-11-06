@@ -3,13 +3,13 @@
 #   ./scripts/build_linux.sh [--skip-tests] [--deb] [--appimage]
 # Výstup:
 #   dist/NetMonitor/NetMonitor                  (onedir)
-#   dist/NetMonitor-1.0.0-linux-x86_64.tar.gz   (+ .desktop, ikona, install.sh)
-#   dist/netmonitor_1.0.0_amd64.deb             (--deb, vyžaduje dpkg-deb)
-#   dist/NetMonitor-1.0.0-x86_64.AppImage       (--appimage, vyžaduje appimagetool v PATH)
+#   dist/NetMonitor-<verze>-linux-x86_64.tar.gz   (+ .desktop, ikona, install.sh)
+#   dist/netmonitor_<verze>_amd64.deb             (--deb, vyžaduje dpkg-deb)
+#   dist/NetMonitor-<verze>-x86_64.AppImage       (--appimage, vyžaduje appimagetool v PATH)
 # Systémové závislosti Qt (Debian/Ubuntu): libxcb-cursor0 libxkbcommon-x11-0 libegl1
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VER=1.0.0
+VER=1.0.1
 SKIP_TESTS=0; DEB=0; APPIMAGE=0
 for a in "$@"; do
   case "$a" in --skip-tests) SKIP_TESTS=1;; --deb) DEB=1;; --appimage) APPIMAGE=1;; esac

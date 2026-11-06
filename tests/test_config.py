@@ -55,7 +55,7 @@ def test_values_are_clamped_and_unknown_keys_ignored():
     })
     t = cfg.ping.targets[0]
     assert (t.interval_s, t.timeout_s, t.retries, t.icon) == (60, 0.2, 1, "auto")
-    assert cfg.appearance.opacity == 1.0 and cfg.appearance.width == 320
+    assert cfg.appearance.opacity == 1.0 and cfg.appearance.width == 260
     assert cfg.appearance.mode == c.MODE_DESKTOP
     assert cfg.network.wan_interval_s == 30
 
@@ -114,3 +114,11 @@ def test_import_rejects_garbage(tmp_path):
 def test_migration_sets_schema_version():
     cfg = c.AppConfig.from_dict({"schema_version": 0})
     assert cfg.schema_version == c.SCHEMA_VERSION
+
+
+def test_migration_v1_to_v2_glass_readability():
+    old = c.AppConfig.from_dict({"schema_version": 1, "appearance": {"glass_alpha": 0.55}})
+    assert old.appearance.glass_alpha == 0.75          # staré výchozí -> nové výchozí
+    custom = c.AppConfig.from_dict({"schema_version": 1, "appearance": {"glass_alpha": 0.4}})
+    assert custom.appearance.glass_alpha == 0.4        # vlastní volba uživatele zůstává
+    assert old.schema_version == 2

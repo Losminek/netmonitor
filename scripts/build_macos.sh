@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # NetMonitor – sestavení pro macOS (Intel i Apple Silicon – sestavuje se pro architekturu použitého Pythonu)
 #   ./scripts/build_macos.sh [--skip-tests] [--dmg]
-# Výstup: dist/NetMonitor.app, volitelně dist/NetMonitor-1.0.0-macos-<arch>.dmg
+# Výstup: dist/NetMonitor.app, volitelně dist/NetMonitor-<verze>-macos-<arch>.dmg
 # Podpis a notarizace: viz docs/DISTRIBUTION.md (vyžaduje Apple Developer ID – nelze provést bez účtu).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VER=1.0.0
+VER=1.0.1
 SKIP_TESTS=0; DMG=0
 for a in "$@"; do case "$a" in --skip-tests) SKIP_TESTS=1;; --dmg) DMG=1;; esac; done
 
