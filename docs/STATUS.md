@@ -1,7 +1,12 @@
-# Stav projektu – verze 1.0.0 (6. 11. 2026)
+# Stav projektu – verze 1.0.1 (7. 11. 2026)
 
 Vývoj a ověřování proběhlo v **Linuxu (Ubuntu 24.04, Python 3.13, PySide6 6.12)** bez fyzické Wi-Fi a bez
-skutečného displeje (Qt offscreen). Windows a macOS kód je napsán, ale **na těchto systémech zatím nebyl spuštěn**.
+skutečného displeje (Qt offscreen).
+
+**Windows 11 x64 – ověřeno uživatelem (7. 11. 2026):** všechny testy prošly (vč. nativního IcmpSendEcho
+a GetAdaptersAddresses), `--diagnose` vrací skutečná data, widget běží průhledně nad plochou,
+EXE + instalátor (Inno Setup) sestaveny lokálně, instalace a autostart fungují.
+macOS: zatím ověřuje jen CI (GitHub Actions, macos-latest + macos-15-intel).
 
 ## Implementováno
 
@@ -43,7 +48,7 @@ z buildu, vykreslení widgetu (offscreen) a porovnání s návrhem.
 
 | Položka | Poznámka |
 |---|---|
-| **Běh na Windows 10/11** | IcmpSendEcho, GetAdaptersAddresses, netsh, HKCU Run, HWND_BOTTOM – kód hotový, nespuštěný |
+| Windows 10 / SSID na Wi-Fi | Windows 11 + Ethernet ověřeno; Windows 10 a Wi-Fi (netsh) zatím ne |
 | **Běh na macOS** | nespuštěno; podpis/notarizace vyžaduje Apple Developer účet |
 | Skutečný kompozitor (průhlednost nad plochou, X11/Wayland chování) | ověřeno jen offscreen render |
 | Skutečná Wi-Fi (SSID/signál) | parsování otestováno na vzorcích výstupů |
