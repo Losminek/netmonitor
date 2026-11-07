@@ -1,12 +1,20 @@
 # Sestavení a vydání NetMonitoru pro Windows, Linux a macOS (Intel i Apple Silicon).
-# Spouští se pushnutím tagu "v*" (např. git tag v1.0.1 && git push origin v1.0.1) nebo ručně (Actions → Run workflow).
-# Na každé platformě se před buildem spustí kompletní testy => ověření i na OS, které nemám lokálně.
+# Spuštění:
+#   a) vytvořením release / tagu "v*" na GitHubu
+#   b) ručně: Actions → Build & Release → Run workflow → zadat existující tag (např. v1.0.1)
+# Každý build nahraje své soubory PŘÍMO do release – nepoužívá Actions artefakty
+# (ty mají u soukromých repozitářů omezenou kvótu úložiště; assety release se do ní nepočítají).
+# Před buildem se na každé platformě spustí kompletní testy.
 name: Build & Release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag existujícího release, do kterého se nahrají soubory (např. v1.0.1)"
+        required: true
 
 permissions:
   contents: write
@@ -26,9 +34,11 @@ jobs:
           - os: macos-15-intel        # Intel
             name: macos-x86_64
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -55,26 +65,14 @@ jobs:
         env: { QT_QPA_PLATFORM: offscreen }
         run: ./scripts/build_macos.sh --dmg
 
-      - uses: actions/upload-artifact@v4
+      - name: Nahrát do release
+        uses: softprops/action-gh-release@v2
         with:
-          name: netmonitor-${{ matrix.name }}
-          if-no-files-found: error
-          path: |
+          tag_name: ${{ env.RELEASE_TAG }}
+          fail_on_unmatched_files: false
+          files: |
             dist/*.zip
             dist/*-setup.exe
             dist/*.tar.gz
             dist/*.deb
             dist/*.dmg
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { path: artifacts, merge-multiple: true }
-      - run: ls -la artifacts
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          generate_release_notes: true
