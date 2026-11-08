@@ -20,7 +20,7 @@ from ..utils.validation import host_kind
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 CONFIG_FILENAME = "config.json"
 
 ICON_CHOICES = ("auto", "globe", "server", "dns", "wifi", "router", "modem", "box", "cloud")
@@ -117,15 +117,17 @@ class GeneralConfig:
     autostart: bool = False
     start_minimized: bool = False
     minimize_to_tray: bool = True
-    check_updates: bool = False
-    update_url: str = ""          # JSON {"version": "x.y.z", "url": "..."}; prázdné = vypnuto
+    check_updates: bool = True
+    update_url: str = "https://github.com/mersl77/netmonitor/releases"   # GitHub repo nebo JSON manifest
+    auto_update: bool = False     # instalovat nové verze bez ptaní (jen nainstalovaná verze pro Windows)
+    skipped_version: str = ""
 
 
 @dataclass
 class AppearanceConfig:
     mode: str = MODE_DESKTOP
     opacity: float = 1.0          # průhlednost celého okna (text i panel)
-    glass_alpha: float = 0.75     # krytí skleněného pozadí panelu (0 = plně průhledné)
+    glass_alpha: float = 1.0      # krytí pozadí panelu: 1 = neprůhledné, 0 = zcela průhledné
     width: int = 600
     height: int = 850
     x: int | None = None
@@ -219,7 +221,7 @@ class AppConfig:
         a = self.appearance
         a.mode = a.mode if a.mode in (MODE_DESKTOP, MODE_ONTOP) else MODE_DESKTOP
         a.opacity = _clamp(a.opacity, 0.2, 1.0, 1.0)
-        a.glass_alpha = _clamp(a.glass_alpha, 0.0, 1.0, 0.75)
+        a.glass_alpha = _clamp(a.glass_alpha, 0.0, 1.0, 1.0)
         a.width = int(_clamp(a.width, 260, 2000, 600))
         a.height = int(_clamp(a.height, 340, 2400, 850))
         a.font_scale = _clamp(a.font_scale, 0.6, 2.0, 1.0)
@@ -321,6 +323,16 @@ def migrate_dict(data: dict) -> dict:
         ping = data.get("general")
         if isinstance(ping, dict) and not ping.get("update_url"):
             ping.pop("update_url", None)          # doplní se nový výchozí odkaz na GitHub
+    if ver < 3:   # 1.2.0: výchozí neprůhledné pozadí; kontrola aktualizací z GitHubu
+        ap = data.get("appearance")
+        if isinstance(ap, dict) and ap.get("glass_alpha") in (0.55, 0.75):
+            ap["glass_alpha"] = 1.0
+        gen = data.get("general")
+        if isinstance(gen, dict):
+            url = str(gen.get("update_url") or "")
+            if not url or url.startswith("https://github.com/mersl77/netmonitor"):
+                gen.pop("update_url", None)
+                gen["check_updates"] = True
     data["schema_version"] = SCHEMA_VERSION
     return data
 

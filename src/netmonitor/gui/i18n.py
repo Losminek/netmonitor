@@ -18,6 +18,8 @@ EN: dict[str, str] = {
     "Uzamknout pozici": "Lock position",
     "Ignorovat myš (click-through)": "Click-through",
     "Průhlednost": "Opacity",
+    "Průhlednost pozadí": "Background transparency",
+    "O aplikaci…": "About…",
     "Velikost": "Size",
     "Kompaktní": "Compact",
     "Výchozí (600 × 850)": "Default (600 × 850)",

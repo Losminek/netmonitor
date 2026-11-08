@@ -56,7 +56,9 @@ pytest            # Linux bez displeje: QT_QPA_PLATFORM=offscreen pytest
   macOS: heslo správce). Před použitím se ověří, zda zadaná IP v síti už neodpovídá (obsazená adresa).
 - **Nastavení → Ping cíle** – sekce (např. DNS, DOMÉNY, ZAŘÍZENÍ), řazení přetažením myší nebo šipkami ▲▼,
   nový cíl se vkládá za vybraný řádek
-- **Pravé tlačítko** – menu: Nastavení, Historie, režim (Na ploše / Vždy navrchu), zámek, click-through,
+- **Odznak ⬆ vpravo nahoře / v ikoně lišty** – je dostupná nová verze; klik = aktualizace (stažení, ověření
+  SHA-256, tichá instalace, restart). Volitelně plně automaticky (Nastavení → Obecné).
+- **Pravé tlačítko** – menu: Aktualizovat (je-li nová verze), Nastavení, Historie, Nastavit IP adresu, průhlednost pozadí, O aplikaci, režim (Na ploše / Vždy navrchu), zámek, click-through,
   průhlednost, velikost, skrytí do oznamovací oblasti, ukončení
 - **Úchyt vpravo dole** – změna velikosti
 - **Dvojklik na nadpis** – Nastavení

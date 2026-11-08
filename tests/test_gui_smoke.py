@@ -183,3 +183,37 @@ def test_ipconfig_dialog_prefill_and_validation(ctrl, monkeypatch):
     d._save_profile()
     assert ctrl.cfg.network.ip_profiles[0]["name"] == "Kancelář"
     d.close()
+
+
+def test_update_badge_menu_and_dialog(ctrl):
+    from netmonitor.core.updater import UpdateInfo
+    from netmonitor.gui.main_widget import MainWidget
+    from netmonitor.gui.updater_ui import AboutDialog, UpdateDialog, UpdateManager
+    w = MainWidget(ctrl)
+    mgr = UpdateManager(ctrl)
+    mgr.available.connect(w.set_update)
+    info = UpdateInfo(version="9.9.9", page_url="https://github.com/x/y/releases/tag/v9.9.9", notes="**Novinky**")
+    mgr._checked((info, ""), manual=False)
+    assert w.update_version == "9.9.9" and mgr.info == info
+    menu = w.build_menu()
+    texts = [a.text() for a in menu.actions()]
+    assert any("9.9.9" in t for t in texts) and any("O aplikaci" in t for t in texts)
+    d = UpdateDialog(mgr)
+    d.open_for()
+    assert "9.9.9" in d.head.text() and not d.btn_install.isVisible()      # ze zdrojů se neinstaluje
+    mgr.skip()
+    assert ctrl.cfg.general.skipped_version == "9.9.9" and w.update_version is None
+    mgr._checked((info, ""), manual=False)
+    assert mgr.info is None                                                  # přeskočená verze se nehlásí
+    a = AboutDialog()
+    a.show()
+    d.close()
+    a.close()
+
+
+def test_background_transparency_menu(ctrl):
+    from netmonitor.gui.main_widget import MainWidget
+    w = MainWidget(ctrl)
+    assert ctrl.cfg.appearance.glass_alpha == 1.0                            # výchozí = neprůhledné
+    w._set_appearance(glass_alpha=0.4)
+    assert abs(ctrl.cfg.appearance.glass_alpha - 0.4) < 1e-9

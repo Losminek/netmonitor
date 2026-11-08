@@ -28,6 +28,15 @@ Připraveno pro IPv6 (`api6.ipify.org`, `ipv6.icanhazip.com`) – zatím se nepo
 
 Selže-li zvolený zdroj, automaticky se použije druhý. Bez dostupného údaje se zobrazí `N/A`.
 
-## Kontrola nové verze (volitelné, výchozí vypnuto)
+## Aktualizace (výchozí zapnuto, lze vypnout v Nastavení → Obecné)
 
-Pouze pokud uživatel vyplní vlastní URL (HTTPS JSON `{"version": "1.0.1", "url": "…"}`).
+Kontrola při startu (po 20 s) a každých 6 hodin. Zdroj (pole „Zdroj aktualizací“):
+
+| Zdroj | Dotaz | Poznámka |
+|---|---|---|
+| GitHub (výchozí `https://github.com/mersl77/netmonitor/releases`) | `GET https://api.github.com/repos/{owner}/{repo}/releases/latest` | funguje jen pro **veřejný** repozitář; bez přihlášení 60 dotazů/h na IP |
+| vlastní JSON manifest (např. na zelina.eu) | `GET <url>` | `{"version","url","notes","windows":{"url","sha256"}}` |
+
+Automatická instalace (jen nainstalovaná verze pro Windows): stáhne `NetMonitor-<verze>-setup.exe`, ověří
+**SHA-256** (u GitHubu pole `digest` souboru, u manifestu `sha256`) – bez shody nic neinstaluje –, spustí
+tichou instalaci Inno Setup (`/VERYSILENT`, bez práv správce) a instalátor aplikaci znovu spustí.

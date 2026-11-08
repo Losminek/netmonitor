@@ -150,6 +150,47 @@ def main(argv=None) -> int:
             d = dialogs["ipconfig"] = IpConfigDialog(ctrl)
         d.open_for(iface or None)
 
+    from .gui.updater_ui import AboutDialog, UpdateDialog, UpdateManager
+    updates = UpdateManager(ctrl)
+
+    def update_dialog():
+        d = dialogs.get("update")
+        if d is None:
+            d = dialogs["update"] = UpdateDialog(updates)
+        d.open_for()
+
+    def about():
+        d = dialogs.get("about")
+        if d is None:
+            d = dialogs["about"] = AboutDialog()
+        d.show()
+        d.raise_()
+
+    def manual_check():
+        def once(info, err):
+            updates.check_done.disconnect(once)
+            if info is None:
+                QMessageBox.information(None, "Aktualizace", err or f"Máte aktuální verzi {__version__}.")
+            else:
+                update_dialog()
+        updates.check_done.connect(once)
+        updates.check(manual=True)
+
+    updates.available.connect(widget.set_update)
+    if tray:
+        updates.available.connect(tray.set_update)
+        tray.messageClicked.connect(lambda: updates.info and update_dialog())
+    widget.open_update.connect(update_dialog)
+    widget.open_about.connect(about)
+
+    _orig_settings = settings
+
+    def settings():  # noqa: F811 – rozšíření o tlačítko "Zkontrolovat nyní"
+        first = "settings" not in dialogs
+        _orig_settings()
+        if first:
+            dialogs["settings"].check_updates_requested.connect(manual_check)
+
     widget.open_settings.connect(settings)
     widget.open_ipconfig.connect(ipconfig)
     widget.open_history.connect(history)
@@ -177,8 +218,8 @@ def main(argv=None) -> int:
     if not start_hidden:
         widget.show()
 
-    if cfg.general.check_updates and cfg.general.update_url and tray:
-        _check_update(ctrl, cfg.general.update_url, tray)
+    if not args.screenshot:
+        updates.start()
 
     if args.screenshot:
         QTimer.singleShot(int(args.screenshot_delay * 1000),
@@ -209,46 +250,6 @@ def _save_screenshot(widget, path: Path, bg: Path | None) -> None:
     p.drawImage(QPoint(40, 40), img)
     p.end()
     out.save(str(path))
-
-
-def parse_update_info(data: dict) -> tuple[str, str] | None:
-    """Podporuje GitHub Releases API (tag_name/html_url) i vlastní JSON (version/url)."""
-    if not isinstance(data, dict):
-        return None
-    ver = str(data.get("tag_name") or data.get("version") or "").strip().lstrip("vV")
-    url = str(data.get("html_url") or data.get("url") or "")
-    return (ver, url) if ver else None
-
-
-def is_newer(latest: str, current: str = __version__) -> bool:
-    def key(v: str):
-        out = []
-        for part in v.split("."):
-            num = "".join(ch for ch in part if ch.isdigit())
-            out.append(int(num) if num else 0)
-        return tuple(out + [0] * (4 - len(out)))
-    try:
-        return key(latest) > key(current)
-    except ValueError:
-        return False
-
-
-def _check_update(ctrl, url: str, tray) -> None:
-    if not url.startswith("https://"):
-        return
-
-    def job():
-        from .core.wan_info import http_get
-        return json.loads(http_get(url, 8))
-    from PySide6.QtWidgets import QSystemTrayIcon
-
-    def done(data):
-        info = parse_update_info(data)
-        if info and is_newer(info[0]):
-            log.info("Dostupná nová verze %s: %s", *info)
-            tray.showMessage("NetMonitor", f"Je dostupná nová verze {info[0]}\n{info[1]}",
-                             QSystemTrayIcon.MessageIcon.Information, 15000)
-    ctrl._run_bg("update-check", job, done)
 
 
 if __name__ == "__main__":

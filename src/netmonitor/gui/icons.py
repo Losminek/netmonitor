@@ -106,8 +106,8 @@ def draw_icon(p: QPainter, kind: str, r: QRectF, color: QColor, width: float = 1
     p.restore()
 
 
-@lru_cache(maxsize=8)
-def app_icon_pixmap(size: int = 256, state: str = "ok") -> QPixmap:
+@lru_cache(maxsize=32)
+def app_icon_pixmap(size: int = 256, state: str = "ok", update: bool = False) -> QPixmap:
     """Ikona aplikace / tray: tmavý zaoblený čtverec, azurový globus a stavová tečka."""
     pm = QPixmap(size, size)
     pm.fill(Qt.GlobalColor.transparent)
@@ -124,12 +124,28 @@ def app_icon_pixmap(size: int = 256, state: str = "ok") -> QPixmap:
     p.setPen(QPen(QColor(8, 30, 58), max(1.0, size * 0.04)))
     p.setBrush(QColor(col))
     p.drawEllipse(QRectF(size - d - size * 0.02, size - d - size * 0.02, d, d))
+    if update:   # odznak "nová verze": azurový kroužek se šipkou vlevo nahoře
+        u = size * 0.42
+        r = QRectF(0, 0, u, u)
+        p.setPen(QPen(QColor(8, 30, 58), max(1.0, size * 0.04)))
+        p.setBrush(QColor("#22d3ff"))
+        p.drawEllipse(r)
+        draw_update_arrow(p, r, QColor(8, 30, 58), max(1.2, size * 0.05))
     p.end()
     return pm
 
 
-def app_icon(state: str = "ok") -> QIcon:
+def draw_update_arrow(p: QPainter, r: QRectF, color: QColor, width: float) -> None:
+    c = r.center()
+    h = r.height() * 0.28
+    p.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    p.drawLine(QPointF(c.x(), c.y() + h), QPointF(c.x(), c.y() - h))
+    p.drawLine(QPointF(c.x() - h * 0.8, c.y() - h * 0.15), QPointF(c.x(), c.y() - h))
+    p.drawLine(QPointF(c.x() + h * 0.8, c.y() - h * 0.15), QPointF(c.x(), c.y() - h))
+
+
+def app_icon(state: str = "ok", update: bool = False) -> QIcon:
     ic = QIcon()
     for sz in (16, 20, 24, 32, 48, 64, 128, 256):
-        ic.addPixmap(app_icon_pixmap(sz, state))
+        ic.addPixmap(app_icon_pixmap(sz, state, update))
     return ic

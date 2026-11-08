@@ -93,11 +93,13 @@ def paint_glass_panel(p: QPainter, rect: QRectF, glass_alpha: float, neon: bool,
 
     # sklo
     g = QLinearGradient(outer.topLeft(), outer.bottomRight())
-    a = int(255 * max(0.0, min(1.0, glass_alpha)))
+    ga = max(0.0, min(1.0, glass_alpha))
+    a = int(round(255 * ga))
     c1, c2, c3 = QColor(GLASS_TOP), QColor(8, 34, 66), QColor(GLASS_BOTTOM)
+    # při 100 % je pozadí zcela neprůhledné (žádná prosvítající místa)
     c1.setAlpha(a)
-    c2.setAlpha(int(a * 0.92))
-    c3.setAlpha(min(255, int(a * 1.05)))
+    c2.setAlpha(a if ga >= 0.999 else int(a * 0.92))
+    c3.setAlpha(a if ga >= 0.999 else min(255, int(a * 1.05)))
     g.setColorAt(0, c1)
     g.setColorAt(0.55, c2)
     g.setColorAt(1, c3)
@@ -105,7 +107,7 @@ def paint_glass_panel(p: QPainter, rect: QRectF, glass_alpha: float, neon: bool,
 
     # jemný lesk v horní části skla
     sheen = QLinearGradient(outer.topLeft(), QPointF(outer.left(), outer.top() + outer.height() * 0.35))
-    sheen.setColorAt(0, QColor(140, 220, 255, int(26 * glass_alpha / 0.55 if glass_alpha else 0)))
+    sheen.setColorAt(0, QColor(140, 220, 255, int(min(40, 26 * glass_alpha / 0.55)) if glass_alpha else 0))
     sheen.setColorAt(1, QColor(140, 220, 255, 0))
     p.fillPath(path, sheen)
 
@@ -217,7 +219,7 @@ QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color:
 QLabel { color: #dbeeff; }
 QLabel[hint="true"] { color: #8fb3d1; }
 QLabel[error="true"] { color: #ff6b78; }
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit, QTextBrowser {
     background: #091628; color: #eaf6ff; border: 1px solid #24557f; border-radius: 4px; padding: 4px 6px;
     selection-background-color: #1a6fa8; }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #22d3ff; }
@@ -241,6 +243,8 @@ QRadioButton::indicator:checked { border-color: #22d3ff;
 QRadioButton::indicator:disabled { border-color: #1c3a55; }
 QHeaderView::section { background: #10304f; color: #9fd8ff; border: none; border-right: 1px solid #1a4468;
     padding: 5px; }
+QProgressBar { background: #091628; border: 1px solid #24557f; border-radius: 4px; text-align: center; color: #eaf6ff; }
+QProgressBar::chunk { background: #22d3ff; border-radius: 3px; }
 QSlider::groove:horizontal { height: 4px; background: #1d4467; border-radius: 2px; }
 QSlider::handle:horizontal { background: #22d3ff; width: 14px; margin: -6px 0; border-radius: 7px; }
 QScrollBar:vertical { background: transparent; width: 8px; }

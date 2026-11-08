@@ -64,6 +64,8 @@ class MainWidget(QWidget):
     open_settings = Signal()
     open_history = Signal(str)
     open_ipconfig = Signal(str)
+    open_update = Signal()
+    open_about = Signal()
     quit_requested = Signal()
     visibility_toggled = Signal(bool)
 
@@ -78,6 +80,7 @@ class MainWidget(QWidget):
         self._dragging = False
         self._win_offset = QPoint()
         self.platform_notice = ""
+        self.update_version: str | None = None
 
         self.title = GlowTitle(tr("SÍŤOVÉ INFORMACE"), px=32, underline="under")
         self.net = NetworkPanel()
@@ -187,6 +190,27 @@ class MainWidget(QWidget):
         p = QPainter(self)
         a = self.ctrl.cfg.appearance
         theme.paint_glass_panel(p, QRectF(self.rect()), a.glass_alpha, a.neon_effects, self._scale)
+        if self.update_version:
+            from .icons import draw_update_arrow
+            r = self._badge_rect()
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            if a.neon_effects:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(34, 211, 255, 60))
+                p.drawEllipse(r.adjusted(-4, -4, 4, 4))
+            p.setPen(QPen(QColor(8, 30, 58), 1.5))
+            p.setBrush(QColor("#22d3ff"))
+            p.drawEllipse(r)
+            draw_update_arrow(p, r, QColor(8, 30, 58), max(1.6, 2.2 * self._scale))
+
+    def _badge_rect(self) -> QRectF:
+        s = self._scale
+        d = 22 * s
+        return QRectF(self.width() - 6 - 20 * s - d, 6 + 26 * s, d, d)
+
+    def set_update(self, info) -> None:
+        self.update_version = info.version if info else None
+        self.update()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -284,6 +308,9 @@ class MainWidget(QWidget):
             if was_drag:
                 self.remember_geometry()
                 return True
+            if self.update_version and self._badge_rect().contains(self.mapFromGlobal(gp).toPointF()):
+                self.open_update.emit()
+                return True
             row = self.ping.row_at(gp)
             if row is not None:
                 self.open_history.emit(row.target.id)
@@ -310,6 +337,13 @@ class MainWidget(QWidget):
             act = m.addAction(tr("Zobrazit widget") if not self.isVisible() else tr("Skrýt do oznamovací oblasti"))
             act.triggered.connect(self.toggle_visible)
             m.addSeparator()
+        if self.update_version:
+            up = m.addAction(f"⬆  Aktualizovat na verzi {self.update_version}…")
+            up.triggered.connect(self.open_update.emit)
+            f = up.font()
+            f.setBold(True)
+            up.setFont(f)
+            m.addSeparator()
         m.addAction(tr("Nastavení…"), self.open_settings.emit)
         m.addAction(tr("Historie…"), lambda: self.open_history.emit(""))
         act_if = self.ctrl.network.active if self.ctrl.network else None
@@ -331,12 +365,13 @@ class MainWidget(QWidget):
         ct.setChecked(a.click_through)
         ct.setEnabled(for_tray or not a.click_through)
         ct.triggered.connect(lambda v: self._set_click_through(v))
-        op = m.addMenu(tr("Průhlednost"))
-        for v in (1.0, 0.9, 0.8, 0.7, 0.6, 0.5):
-            act = op.addAction(f"{int(v * 100)} %")
+        op = m.addMenu(tr("Průhlednost pozadí"))
+        for pct in (0, 20, 40, 60, 80, 100):
+            label = f"{pct} %" + ("  (neprůhledné)" if pct == 0 else "  (jen text)" if pct == 100 else "")
+            act = op.addAction(label)
             act.setCheckable(True)
-            act.setChecked(abs(a.opacity - v) < 0.01)
-            act.triggered.connect(lambda _=False, v=v: self._set_appearance(opacity=v))
+            act.setChecked(abs((1 - a.glass_alpha) - pct / 100) < 0.01)
+            act.triggered.connect(lambda _=False, g=1 - pct / 100: self._set_appearance(glass_alpha=g))
         sz = m.addMenu(tr("Velikost"))
         for label, (w, h) in ((tr("Mini (300 × 430)"), (300, 430)), (tr("Malý (380 × 540)"), (380, 540)),
                               (tr("Kompaktní (460 × 650)"), (460, 650)), (tr("Výchozí (600 × 850)"), (600, 850)),
@@ -347,6 +382,7 @@ class MainWidget(QWidget):
         if not for_tray:
             m.addAction(tr("Skrýt do oznamovací oblasti"), self.hide)
         m.addSeparator()
+        m.addAction(tr("O aplikaci…"), self.open_about.emit)
         m.addAction(tr("Ukončit"), self.quit_requested.emit)
         return m
 

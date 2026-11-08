@@ -118,7 +118,7 @@ def test_migration_sets_schema_version():
 
 def test_migration_v1_to_v2_glass_readability():
     old = c.AppConfig.from_dict({"schema_version": 1, "appearance": {"glass_alpha": 0.55}})
-    assert old.appearance.glass_alpha == 0.75          # staré výchozí -> nové výchozí
+    assert old.appearance.glass_alpha == 1.0           # staré výchozí -> přes v2 (0.75) až na v3 (neprůhledné)
     custom = c.AppConfig.from_dict({"schema_version": 1, "appearance": {"glass_alpha": 0.4}})
     assert custom.appearance.glass_alpha == 0.4        # vlastní volba uživatele zůstává
-    assert old.schema_version == 2
+    assert old.schema_version == 3

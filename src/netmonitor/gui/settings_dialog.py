@@ -239,6 +239,7 @@ class TargetTree(QTreeWidget):
 
 class SettingsDialog(QDialog):
     history_requested = Signal(str)
+    check_updates_requested = Signal()
 
     def __init__(self, ctrl: Controller, main_widget, parent=None):
         super().__init__(parent)
@@ -318,8 +319,11 @@ class SettingsDialog(QDialog):
             self.update_url.setText(g.update_url)
             self.rb_desktop.setChecked(a.mode == MODE_DESKTOP)
             self.rb_ontop.setChecked(a.mode == MODE_ONTOP)
-            self.opacity.setValue(int(a.opacity * 100))
-            self.glass.setValue(int(a.glass_alpha * 100))
+            self.opacity.setValue(int(round((1 - a.opacity) * 100)))
+            self.opacity_lbl.setText(f"{self.opacity.value()} %")
+            self.glass.setValue(int(round((1 - a.glass_alpha) * 100)))
+            x = self.glass.value()
+            self.glass_lbl.setText(f"{x} %" + ("  neprůhledné" if x == 0 else "  jen text" if x == 100 else ""))
             self.w_spin.setValue(self.mw.width())
             self.h_spin.setValue(self.mw.height())
             for k, b in self.color_btns.items():
@@ -354,12 +358,18 @@ class SettingsDialog(QDialog):
         f.addRow(self.autostart)
         f.addRow(self._check("Spouštět minimalizované (jen ikona v oznamovací oblasti)", "general", "start_minimized"))
         f.addRow(self._check("Při skrytí minimalizovat do oznamovací oblasti", "general", "minimize_to_tray"))
-        f.addRow(self._check("Kontrolovat novou verzi (volitelné, vyžaduje URL)", "general", "check_updates"))
+        f.addRow(self._check("Kontrolovat nové verze (při startu a každých 6 hodin)", "general", "check_updates"))
+        f.addRow(self._check("Instalovat aktualizace automaticky (bez ptaní)", "general", "auto_update"))
         self.update_url = QLineEdit()
-        self.update_url.setPlaceholderText("https://…/netmonitor-latest.json  (prázdné = vypnuto)")
+        self.update_url.setPlaceholderText("https://github.com/<účet>/<repozitář>/releases  nebo JSON manifest")
         self.update_url.editingFinished.connect(
             lambda: self._apply(lambda c: setattr(c.general, "update_url", self.update_url.text().strip())))
-        f.addRow("URL informace o verzi", self.update_url)
+        urow = QHBoxLayout()
+        urow.addWidget(self.update_url, 1)
+        chk = QPushButton("Zkontrolovat nyní")
+        chk.clicked.connect(self.check_updates_requested.emit)
+        urow.addWidget(chk)
+        f.addRow("Zdroj aktualizací", urow)
         row = QHBoxLayout()
         for label, path in (("Složka konfigurace", config_dir()), ("Složka dat", data_dir()), ("Logy", log_dir())):
             b = QPushButton(label)
@@ -368,6 +378,10 @@ class SettingsDialog(QDialog):
         f.addRow(row)
         f.addRow(hint(f"Konfigurace: {cfgmod.default_config_path()}\nBez telemetrie, bez účtů, "
                       f"veškerá data zůstávají v tomto počítači."))
+        link = QLabel(f"NetMonitor {__version__} · další projekty: "
+                      "<a style='color:#38d9ff' href='https://zelina.eu/projekty.html'>zelina.eu/projekty</a>")
+        link.setOpenExternalLinks(True)
+        f.addRow(link)
         return w
 
     def _toggle_autostart(self, on: bool) -> None:
@@ -398,12 +412,30 @@ class SettingsDialog(QDialog):
         v.addWidget(gm)
 
         f = QFormLayout()
-        self.opacity = QSlider(Qt.Orientation.Horizontal, minimum=20, maximum=100)
-        self.opacity.valueChanged.connect(lambda x: self._apply(lambda c: setattr(c.appearance, "opacity", x / 100)))
-        f.addRow("Průhlednost celého widgetu", self.opacity)
         self.glass = QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=100)
-        self.glass.valueChanged.connect(lambda x: self._apply(lambda c: setattr(c.appearance, "glass_alpha", x / 100)))
-        f.addRow("Krytí skleněného pozadí", self.glass)
+        self.glass_lbl = QLabel()
+        self.glass_lbl.setMinimumWidth(130)
+
+        def glass_changed(x: int) -> None:
+            self.glass_lbl.setText(f"{x} %" + ("  neprůhledné" if x == 0 else "  jen text" if x == 100 else ""))
+            self._apply(lambda c: setattr(c.appearance, "glass_alpha", 1 - x / 100))
+        self.glass.valueChanged.connect(glass_changed)
+        gr = QHBoxLayout()
+        gr.addWidget(self.glass, 1)
+        gr.addWidget(self.glass_lbl)
+        f.addRow("Průhlednost pozadí", gr)
+        self.opacity = QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=80)
+        self.opacity_lbl = QLabel()
+        self.opacity_lbl.setMinimumWidth(130)
+
+        def opacity_changed(x: int) -> None:
+            self.opacity_lbl.setText(f"{x} %")
+            self._apply(lambda c: setattr(c.appearance, "opacity", 1 - x / 100))
+        self.opacity.valueChanged.connect(opacity_changed)
+        orow = QHBoxLayout()
+        orow.addWidget(self.opacity, 1)
+        orow.addWidget(self.opacity_lbl)
+        f.addRow("Průhlednost celého widgetu (i text)", orow)
         size = QHBoxLayout()
         self.w_spin = QSpinBox(minimum=260, maximum=2000, suffix=" px", keyboardTracking=False)
         self.h_spin = QSpinBox(minimum=340, maximum=2400, suffix=" px", keyboardTracking=False)

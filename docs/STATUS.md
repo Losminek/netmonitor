@@ -1,4 +1,4 @@
-# Stav projektu – verze 1.1.0 (8. 11. 2026)
+# Stav projektu – verze 1.2.0 (8. 11. 2026)
 
 Vývoj a ověřování proběhlo v **Linuxu (Ubuntu 24.04, Python 3.13, PySide6 6.12)** bez fyzické Wi-Fi a bez
 skutečného displeje (Qt offscreen).
@@ -30,6 +30,8 @@ macOS: zatím ověřuje jen CI (GitHub Actions, macos-latest + macos-15-intel).
 | Single-instance zámek, atomický zápis konfigurace, záloha poškozené konfigurace | ✔ |
 | 1.1.0: sekce cílů (nadpisy ve widgetu i v nastavení), řazení přetažením / šipkami, vkládání za výběr | ✔ |
 | 1.1.0: nastavení IP síťové karty (DHCP / pevná IP / DNS, profily, kontrola obsazené IP) | ✔ – Windows: netsh přes UAC (-EncodedCommand), Linux: nmcli, macOS: networksetup |
+| 1.2.0: automatické aktualizace (GitHub Releases / JSON manifest, SHA-256, tichá instalace, odznak ve widgetu a liště) | ✔ – vyžaduje veřejně dostupný zdroj |
+| 1.2.0: výchozí neprůhledné pozadí, posuvník průhlednosti pozadí 0–100 %, „O aplikaci“ s odkazem na zelina.eu/projekty | ✔ |
 | Build: PyInstaller spec, Windows (ZIP + Inno Setup), Linux (tar.gz, .deb, AppImage), macOS (.app, DMG) | ✔ |
 
 ## Otestováno (automaticky, Linux)

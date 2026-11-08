@@ -13,6 +13,7 @@ class Tray(QSystemTrayIcon):
         super().__init__(app_icon("unknown"))
         self.widget = widget
         self._state = None
+        self._update = False
         self.setToolTip("NetMonitor")
         self._menu = None
         self._rebuild_menu()
@@ -37,9 +38,18 @@ class Tray(QSystemTrayIcon):
         state = {ConnState.ONLINE: "ok", ConnState.DEGRADED: "warn", ConnState.OFFLINE: "bad"}.get(ev.state, "unk")
         if state != self._state:
             self._state = state
-            self.setIcon(app_icon(state))
+            self.setIcon(app_icon(state, self._update))
         wan = self.widget.ctrl.wan.current or "N/A"
         self.setToolTip(f"NetMonitor – {ev.state.value}\nWAN: {wan}\n{ev.reason}"[:120])
+
+    def set_update(self, info) -> None:
+        self._update = info is not None
+        self.setIcon(app_icon(self._state or "unk", self._update))
+        self._rebuild_menu()
+        if info is not None:
+            self.showMessage("NetMonitor – nová verze", f"Je dostupná verze {info.version}. "
+                             "Klikněte pravým tlačítkem na ikonu → Aktualizovat.",
+                             QSystemTrayIcon.MessageIcon.Information, 10000)
 
     def on_notification(self, n: Notification) -> None:
         icon = QSystemTrayIcon.MessageIcon.Warning if n.critical else QSystemTrayIcon.MessageIcon.Information
