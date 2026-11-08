@@ -12,8 +12,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -SkipTests
 
 - Požadavky: Python 3.12/3.13 x64 z python.org (`py` launcher), volitelně Inno Setup 6
   (`winget install JRSoftware.InnoSetup`) pro instalátor.
-- Výstup: `dist\NetMonitor\NetMonitor.exe` (+ celá složka), `dist\NetMonitor-1.0.0-win64.zip`,
-  `dist\NetMonitor-1.0.0-setup.exe`.
+- Výstup: `dist\NetMonitor\NetMonitor.exe` (+ celá složka), `dist\NetMonitor-<verze>-win64.zip`,
+  `dist\NetMonitor-<verze>-setup.exe`.
 - Instalátor: bez admin práv do `%LOCALAPPDATA%\Programs\NetMonitor`, volitelný autostart (HKCU\…\Run),
   zástupce v nabídce Start.
 - Autostart z aplikace: *Nastavení → Obecné* zapisuje `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.

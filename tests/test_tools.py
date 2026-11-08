@@ -117,6 +117,56 @@ def test_parse_tracepath():
     assert hops[-1].reached and hops[2].rtts == [None]
 
 
+TRACERT_EN = """
+Tracing route to 8.8.8.8 over a maximum of 30 hops
+
+  1    <1 ms    <1 ms    <1 ms  192.168.14.1
+  2     3 ms     2 ms     3 ms  100.64.0.1
+  3     *        *        *     Request timed out.
+  4     *       12 ms    11 ms  194.228.190.1
+  5  10.20.30.40  reports: Destination host unreachable.
+  6     6 ms     6 ms     6 ms  8.8.8.8
+
+Trace complete.
+"""
+
+TRACERT_CZ = """
+Výpis trasy k 8.8.8.8 s nejvýše 30 směrováními
+
+  1    <1 ms    <1 ms    <1 ms  192.168.14.1
+  2     *        *        *     Vypršel časový limit žádosti.
+  3  10.20.30.40  hlásí: Cílový hostitel není dostupný.
+  4     6 ms     5 ms     7 ms  8.8.8.8
+
+Trasování bylo dokončeno.
+"""
+
+
+def test_parse_tracert_en():
+    hops = [h for h in (traceroute.parse_tracert_line(x, "8.8.8.8") for x in TRACERT_EN.splitlines()) if h]
+    assert [h.n for h in hops] == [1, 2, 3, 4, 5, 6]
+    assert hops[0].ip == "192.168.14.1" and hops[0].rtts == [1.0, 1.0, 1.0]
+    assert hops[2].ip is None and hops[2].rtts == [None, None, None] and hops[2].loss_pct == 100
+    assert hops[3].ip == "194.228.190.1" and hops[3].rtts == [None, 12.0, 11.0]
+    assert hops[4].ip == "10.20.30.40" and hops[4].note == "!H"
+    assert hops[5].reached and not any(h.reached for h in hops[:5])
+
+
+def test_parse_tracert_cz():
+    hops = [h for h in (traceroute.parse_tracert_line(x, "8.8.8.8") for x in TRACERT_CZ.splitlines()) if h]
+    assert [h.n for h in hops] == [1, 2, 3, 4]
+    assert hops[1].ip is None and hops[2].note == "!H" and hops[3].reached and hops[3].rtts == [6.0, 5.0, 7.0]
+
+
+def test_tracert_command(monkeypatch, tmp_path):
+    exe = tmp_path / "tracert.exe"
+    exe.write_text("")
+    monkeypatch.setattr(traceroute.sys, "platform", "win32")
+    monkeypatch.setattr(traceroute.shutil, "which", lambda n: str(exe) if n == "tracert" else None)
+    args, kind = traceroute.system_command("8.8.8.8", 30, 3, 1.0)
+    assert kind == "tracert" and args[1:] == ["-d", "-4", "-h", "30", "-w", "1000", "8.8.8.8"]
+
+
 @pytest.mark.integration
 def test_traceroute_live_localhost():
     got = []

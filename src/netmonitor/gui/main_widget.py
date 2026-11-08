@@ -78,7 +78,7 @@ class MainWidget(QWidget):
         self.setWindowTitle("NetMonitor")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        self.setMouseTracking(True)          # kurzor "ruka" nad výklenkem s verzí
+        self.setMouseTracking(True)          # kurzor "ruka" nad tabem s verzí
         self._scale = 1.0
         self._press_pos: QPoint | None = None
         self._dragging = False
@@ -123,7 +123,7 @@ class MainWidget(QWidget):
             self._restore_geometry(cfg)
         self._scale = self._compute_scale()
         s = self._scale
-        self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(30 * s))
+        self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(26 * s))
         self.title.set_style(s, a.neon_effects)
         self.net.apply_style(cfg, s)
         self.ping.apply_style(cfg, s)
@@ -193,7 +193,8 @@ class MainWidget(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         a = self.ctrl.cfg.appearance
-        theme.paint_glass_panel(p, QRectF(self.rect()), a.glass_alpha, a.neon_effects, self._scale)
+        theme.paint_glass_panel(p, QRectF(self.rect()), a.glass_alpha, a.neon_effects, self._scale,
+                                self._brand_text_w())
         self._paint_brand(p)
         if self.update_version:
             from .icons import draw_update_arrow
@@ -216,41 +217,41 @@ class MainWidget(QWidget):
         return f"v{__version__}  ·  zelina.eu"
 
     def _brand_font(self):
-        f = theme.font("body", 11.5, theme.QFont.Weight.Medium, self._scale)
+        f = theme.font("body", 12.5, theme.QFont.Weight.Medium, self._scale)
         f.setLetterSpacing(theme.QFont.SpacingType.PercentageSpacing, 106)
         return f
 
-    def _brand_rect(self) -> QRectF:
+    def _brand_text_w(self) -> float:
         from PySide6.QtGui import QFontMetricsF
+        return QFontMetricsF(self._brand_font()).horizontalAdvance(self._brand_text())
+
+    def _tab_rect(self) -> QRectF:
+        """Celý zvýšený tab vpravo nahoře (klikací plocha)."""
+        outer = QRectF(self.rect()).adjusted(6, 6, -6, -6)
+        w, h = theme.tab_size(outer, self._scale, self._brand_text_w())
+        return QRectF(outer.right() - w, outer.top(), w, h + 2)
+
+    def _brand_rect(self) -> QRectF:
+        """Oblast textu verze v tabu (za proužky ///)."""
         s = self._scale
-        fm = QFontMetricsF(self._brand_font())
-        w = fm.horizontalAdvance(self._brand_text()) + 34 * s
-        h = fm.height() + 6 * s
-        bottom = self.height() - 6
-        return QRectF(6 + 34 * s, bottom - h, w, h)
+        t = self._tab_rect()
+        left = t.left() + 18 * s + 3 * 13 * s + 10 * s
+        return QRectF(left, t.top(), max(0.0, t.right() - 14 * s - left), t.height() - 2)
 
     def _paint_brand(self, p: QPainter) -> None:
-        from PySide6.QtGui import QPainterPath
         r = self._brand_rect()
         s = self._scale
-        ch = r.height() * 0.75                     # zkosené boky jako "tab" nahoře vpravo
-        path = QPainterPath()
-        path.moveTo(r.left(), r.bottom())
-        path.lineTo(r.left() + ch, r.top())
-        path.lineTo(r.right() - ch, r.top())
-        path.lineTo(r.right(), r.bottom())
         hover = getattr(self, "_brand_hover", False)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        fill = QColor(6, 26, 50) if self.ctrl.cfg.appearance.glass_alpha > 0.3 else QColor(6, 26, 50, 170)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(fill)
-        p.drawPath(path)
-        p.setPen(QPen(QColor(64, 220, 255, 255 if hover else 200), 1.4 * s))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
         p.setFont(self._brand_font())
-        p.setPen(QColor("#eaf6ff") if hover else QColor(56, 217, 255, 220))
-        p.drawText(r.adjusted(0, 1 * s, 0, 0), Qt.AlignmentFlag.AlignCenter, self._brand_text())
+        p.setPen(QColor("#ffffff") if hover else QColor(150, 236, 255))
+        p.drawText(r.adjusted(0, 1 * s, 0, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                   self._brand_text())
+        if hover:                                   # podtržení při najetí = odkaz
+            fm_w = self._brand_text_w()
+            y = r.bottom() - 2 * s
+            p.setPen(QPen(QColor(64, 220, 255, 200), 1.0 * s))
+            p.drawLine(QPointF(r.left(), y), QPointF(r.left() + fm_w, y))
 
     def _open_projects(self) -> None:
         from PySide6.QtCore import QUrl
@@ -258,15 +259,15 @@ class MainWidget(QWidget):
         QDesktopServices.openUrl(QUrl(self.PROJECTS_URL))
 
     def mouseMoveEvent(self, e):
-        inside = self._brand_rect().contains(e.position())
+        inside = self._tab_rect().contains(e.position())
         if inside != getattr(self, "_brand_hover", False):
             self._brand_hover = inside
             self.setCursor(Qt.CursorShape.PointingHandCursor if inside else Qt.CursorShape.ArrowCursor)
-            self.update(self._brand_rect().toAlignedRect().adjusted(-3, -3, 3, 3))
+            self.update(self._tab_rect().toAlignedRect().adjusted(-3, -3, 3, 3))
         super().mouseMoveEvent(e)
 
     def event(self, e):
-        if e.type() == QEvent.Type.ToolTip and self._brand_rect().contains(e.position() if hasattr(e, "position")
+        if e.type() == QEvent.Type.ToolTip and self._tab_rect().contains(e.position() if hasattr(e, "position")
                                                                           else QPointF(e.pos())):
             from PySide6.QtWidgets import QToolTip
             QToolTip.showText(e.globalPos(), "Další projekty – zelina.eu/projekty", self)
@@ -291,7 +292,7 @@ class MainWidget(QWidget):
             self._scale = new_scale
             s = new_scale
             cfg = self.ctrl.cfg
-            self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(30 * s))
+            self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(26 * s))
             self.title.set_style(s, cfg.appearance.neon_effects)
             self.net.apply_style(cfg, s)
             self.ping.apply_style(cfg, s)
@@ -378,7 +379,7 @@ class MainWidget(QWidget):
             if was_drag:
                 self.remember_geometry()
                 return True
-            if self._brand_rect().contains(self.mapFromGlobal(gp).toPointF()):
+            if self._tab_rect().contains(self.mapFromGlobal(gp).toPointF()):
                 self._open_projects()
                 return True
             if self.update_version and self._badge_rect().contains(self.mapFromGlobal(gp).toPointF()):

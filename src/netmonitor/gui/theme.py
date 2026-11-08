@@ -58,11 +58,21 @@ def font(kind: str = "body", px: float = 16, weight: QFont.Weight = QFont.Weight
     return f
 
 
-def panel_path(r: QRectF, radius: float, notch: bool = True) -> QPainterPath:
+def tab_size(r: QRectF, scale: float = 1.0, text_w: float = 0.0) -> tuple[float, float]:
+    """Rozměr zvýšeného tabu vpravo nahoře; s textem (verze) je širší a vyšší."""
+    if text_w <= 0:
+        return min(140.0, r.width() * 0.24), 14.0
+    h = max(14.0, 22.0 * scale)
+    w = 18 * scale + 3 * 13 * scale + 10 * scale + text_w + 22 * scale   # sklon + "///" + mezera + text + okraj
+    return min(w, r.width() * 0.62), h
+
+
+def panel_path(r: QRectF, radius: float, notch: bool = True, tab: tuple[float, float] | None = None) -> QPainterPath:
     """Obrys skleněného panelu se zvýšeným 'tabem' vpravo nahoře (dle návrhu)."""
     p = QPainterPath()
-    tab_h = 14.0 if notch else 0.0
-    tab_w = min(140.0, r.width() * 0.24)
+    tab_w, tab_h = tab or (min(140.0, r.width() * 0.24), 14.0)
+    if not notch:
+        tab_h = 0.0
     top = r.top() + tab_h
     x0, y0, x1, y1 = r.left(), top, r.right(), r.bottom()
     p.moveTo(x0 + radius, y0)
@@ -85,11 +95,13 @@ def panel_path(r: QRectF, radius: float, notch: bool = True) -> QPainterPath:
     return p
 
 
-def paint_glass_panel(p: QPainter, rect: QRectF, glass_alpha: float, neon: bool, scale: float = 1.0) -> None:
+def paint_glass_panel(p: QPainter, rect: QRectF, glass_alpha: float, neon: bool, scale: float = 1.0,
+                      tab_text_w: float = 0.0) -> None:
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     radius = 22 * scale
     outer = rect.adjusted(6, 6, -6, -6)
-    path = panel_path(outer, radius)
+    tab = tab_size(outer, scale, tab_text_w)
+    path = panel_path(outer, radius, tab=tab)
 
     # sklo
     g = QLinearGradient(outer.topLeft(), outer.bottomRight())
@@ -131,9 +143,9 @@ def paint_glass_panel(p: QPainter, rect: QRectF, glass_alpha: float, neon: bool,
     p.drawPath(ip)
 
     # "///" proužky na tabu vpravo nahoře
-    tab_w = min(140.0, outer.width() * 0.24)
+    tab_w, tab_h = tab
     sx = outer.right() - tab_w + 18 * scale
-    sy = outer.top() + 3 * scale
+    sy = outer.top() + (tab_h - 8 * scale) / 2
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor(34, 211, 255, 235))
     for i in range(3):

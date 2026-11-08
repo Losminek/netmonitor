@@ -1,8 +1,14 @@
 # Změny
 
+## 1.3.1
+- Oprava: traceroute na Windows mohl po několika skocích shodit celou aplikaci. Nově běží přes systémový `tracert` v samostatném procesu.
+- Větší rezerva pro odpovědi ICMP na Windows (chybové odpovědi routerů s citovaným paketem)
+- Při případném tvrdém pádu se zapíše `logs/crash.log` (výpis všech vláken) pro snadnou diagnostiku
+- Číslo verze s odkazem na zelina.eu/projekty přesunuto do horního pravého „tabu“ rámečku widgetu
+
 ## 1.3.0
 - Wake-on-LAN: pravým tlačítkem na cíl ve widgetu → Probudit; MAC adresa u cíle (tlačítko „Zjistit“ ji přečte z ARP)
-- Traceroute k cíli s živou tabulkou skoků (Windows nativně bez tracert)
+- Traceroute k cíli s živou tabulkou skoků
 - Test rychlosti internetu (stahování, nahrávání, odezva, jitter) – menu widgetu i detail cíle
 - Pravé tlačítko na řádku cíle: detail a graf, testovat nyní, traceroute, probudit
 - Výklenek s číslem verze ve spodní hraně widgetu – odkaz na zelina.eu/projekty

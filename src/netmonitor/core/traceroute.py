@@ -1,6 +1,7 @@
 """Traceroute – trasa paketů k cíli po jednotlivých skocích (hopech).
 
-* Windows: nativně přes IcmpSendEcho s omezeným TTL (bez tracert, nezávislé na jazyku systému).
+* Windows: systémový `tracert -d` v samostatném procesu (případná chyba nemůže shodit aplikaci);
+  výstup se parsuje nezávisle na jazyku systému (čísla, "ms", "*", IP adresy).
 * Linux / macOS: systémový `traceroute -n` (případně `tracepath -n`), výstup se průběžně parsuje.
 
 Výsledky se doručují po jednotlivých hopech přes callback (vhodné pro živé zobrazení).
@@ -74,6 +75,35 @@ def parse_traceroute_line(line: str, dest_ip: str | None = None) -> Hop | None:
     return hop
 
 
+def parse_tracert_line(line: str, dest_ip: str | None = None) -> Hop | None:
+    """Windows tracert (libovolný jazyk):
+    '  1    <1 ms    <1 ms    <1 ms  192.168.14.1'
+    '  3     *        *        *     Request timed out.' / 'Vypršel časový limit žádosti.'
+    '  5  192.168.1.1  reports: Destination host unreachable.' / 'hlásí: Cílový hostitel není dostupný.'"""
+    m = _TR_LINE.match(line)
+    if not m:
+        return None
+    rest = m.group(2)
+    hop = Hop(int(m.group(1)))
+    for ms, star in re.findall(r"<?\s*(\d+)\s*ms|(\*)", rest):
+        hop.rtts.append(float(ms) if ms else None)
+    ipm = re.search(r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?![\d.])|\[?([0-9a-fA-F]*:[0-9a-fA-F:]+)\]?", rest)
+    if ipm:
+        cand = ipm.group(1) or ipm.group(2)
+        try:
+            ipaddress.ip_address(cand)
+            hop.ip = cand
+        except ValueError:
+            pass
+    if not hop.rtts and hop.ip is None:
+        return None
+    if hop.ip and not hop.rtts:            # "X reports: Destination host/net unreachable"
+        hop.rtts = [None]
+        hop.note = "!H"
+    hop.reached = bool(dest_ip and hop.ip == dest_ip)
+    return hop
+
+
 _TP_LINE = re.compile(r"^\s*(\d+)\??:\s+(.*)$")
 
 
@@ -100,6 +130,13 @@ def parse_tracepath_line(line: str, dest_ip: str | None = None) -> Hop | None:
 
 def system_command(dest_ip: str, max_hops: int, probes: int, timeout: float) -> tuple[list[str], str] | None:
     v6 = ":" in dest_ip
+    if sys.platform == "win32":
+        tc = shutil.which("tracert") or os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
+                                                     "tracert.exe")
+        if not os.path.exists(tc):
+            return None
+        return [tc, "-d", "-6" if v6 else "-4", "-h", str(max_hops), "-w", str(max(500, int(timeout * 1000))),
+                dest_ip], "tracert"
     wait = str(max(1, int(round(timeout))))
     tr = shutil.which("traceroute6" if v6 and sys.platform == "darwin" else "traceroute")
     if tr:
@@ -121,47 +158,25 @@ def run(host: str, on_hop: Callable[[Hop], None], *, max_hops: int = 30, probes:
     ip, err = (resolver or Resolver()).resolve(host)
     if not ip:
         return None, err or "Doménu nelze přeložit"
-    if sys.platform == "win32" and ":" not in ip:
-        return ip, _run_windows(ip, on_hop, max_hops, probes, timeout, cancelled)
     return ip, _run_system(ip, on_hop, max_hops, probes, timeout, cancelled)
-
-
-def _run_windows(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
-    from .ping_engine import WindowsIcmpPinger
-    p = WindowsIcmpPinger()
-    misses = 0
-    for ttl in range(1, max_hops + 1):
-        if cancelled():
-            return "Zrušeno"
-        hop = Hop(ttl)
-        for _ in range(probes):
-            kind, who, rtt = p.probe_ttl(ip, ttl, timeout)
-            hop.rtts.append(rtt if kind in ("hop", "reached", "unreach") else None)
-            if who and hop.ip is None:
-                hop.ip = who
-            if kind == "reached":
-                hop.reached = True
-            if kind == "unreach":
-                hop.note = "!H"
-        on_hop(hop)
-        if hop.reached or hop.note:
-            return ""
-        misses = misses + 1 if hop.ip is None else 0
-        if misses >= 6:
-            return "Dalších 6 skoků neodpovídá – ukončeno"
-    return f"Cíl nedosažen do {max_hops} skoků"
 
 
 def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
     cmd = system_command(ip, max_hops, probes, timeout)
     if not cmd:
+        if sys.platform == "win32":
+            return "Systémový příkaz tracert nebyl nalezen"
         return "Není nainstalován traceroute ani tracepath (např. sudo apt install traceroute)"
     args, kind = cmd
-    parse = parse_traceroute_line if kind == "traceroute" else parse_tracepath_line
+    parse = {"traceroute": parse_traceroute_line, "tracepath": parse_tracepath_line,
+             "tracert": parse_tracert_line}[kind]
     env = dict(os.environ, LC_ALL="C", LANG="C")
+    extra: dict = {}
+    if sys.platform == "win32":
+        extra = {"creationflags": 0x08000000, "encoding": "oem", "errors": "replace"}   # CREATE_NO_WINDOW
     try:
         proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                env=env, text=True, bufsize=1)
+                                env=env, text=True, bufsize=1, **extra)
     except OSError as e:
         return str(e)
     reached = False
