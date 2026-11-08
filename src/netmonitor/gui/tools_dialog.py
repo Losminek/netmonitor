@@ -13,9 +13,10 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QHeaderV
 
 from ..core import speedtest, traceroute, wol
 from ..core.config import PingTarget
+from ..core.notifier import Notification
 from ..core.ping_engine import PingResult, ping_host
 from . import theme
-from .ping_panel import fmt_rtt
+from .ping_panel import ERR_DESC, fmt_rtt
 
 log = logging.getLogger(__name__)
 
@@ -287,6 +288,7 @@ class WolDialog(QDialog):
         self.target = replace(target)
         self.pending = 0
         self.detecting = False
+        self._best_result: PingResult | None = None
         self.setWindowTitle(f"Wake-on-LAN – {target.name}")
         self.setStyleSheet(theme.DIALOG_QSS)
         self.resize(480, 0)
@@ -307,6 +309,8 @@ class WolDialog(QDialog):
         self.status.setText(text)
 
     def start(self) -> None:
+        self._best_result = None
+        self.setWindowTitle(f"Wake-on-LAN – {self.target.name}")
         if self.target.mac:
             self._send(self.target.mac)
             return
@@ -326,15 +330,24 @@ class WolDialog(QDialog):
         if not current or current.host != self.target.host:
             self._status("Cíl se během zjišťování změnil; spusťte probuzení znovu.")
             return
-        if QMessageBox.question(self, "Wake-on-LAN",
+        if not current.mac and QMessageBox.question(self, "Wake-on-LAN",
                                 f"Nalezena MAC adresa {mac} pro {self.target.host}.\nUložit ji k cíli a odeslat "
                                 "probouzecí paket?") != QMessageBox.StandardButton.Yes:
             self._status("Probuzení zrušeno.")
             return
-        cfg = self.ctrl.cfg.copy()
-        t = cfg.target_by_id(self.target.id)
-        if t:
-            t.mac = mac
+        # Modální dotaz má vlastní event loop; konfigurace se mohla změnit i během něj.
+        current = self.ctrl.cfg.target_by_id(self.target.id)
+        if not current or current.host != self.target.host:
+            self._status("Cíl se během zjišťování změnil; spusťte probuzení znovu.")
+            return
+        self.target = replace(current)
+        if current.mac:
+            mac = current.mac                 # ručně zadaná MAC má přednost před ARP výsledkem
+        else:
+            cfg = self.ctrl.cfg.copy()
+            t = cfg.target_by_id(self.target.id)
+            if t:
+                t.mac = mac
             self.ctrl.update_config(cfg)
         self._send(mac)
 
@@ -365,16 +378,32 @@ class WolDialog(QDialog):
 
     def _checked(self, attempt: int, result: PingResult) -> None:
         self.pending -= 1
-        detail = f"dostupný ({fmt_rtt(result.rtt_ms)})" if result.ok else f"neodpovídá ({result.error or result.status.value})"
-        self._status(f"Ověření {attempt}/3: {self.target.name} – {detail}.")
+        # Úspěch dokazuje probuzení i při pozdější ztrátě paketu. Do té doby zobrazuj poslední chybu.
+        if self._best_result is None or not self._best_result.ok:
+            self._best_result = result
+        best = self._best_result
+        detail = (f"dostupný ({fmt_rtt(best.rtt_ms)})" if best.ok else
+                  f"neodpovídá ({best.error or ERR_DESC.get(best.status, 'chyba')})")
+        earlier = " Cíl odpověděl při dřívějším ověření." if best.ok and not result.ok else ""
+        text = f"Ověření {attempt}/3: {self.target.name} – {detail}.{earlier}"
+        self._status(text)
+        if not self.isVisible():
+            self.ctrl.notification.emit(Notification("wol", f"wol:{self.target.id}",
+                                                     f"Wake-on-LAN – {self.target.name}", text))
+        current = self.ctrl.cfg.target_by_id(self.target.id)
+        if current and current.enabled and current.host == self.target.host:
+            self.ctrl.test_now(current.id)
 
 
 def wake(ctrl, target: PingTarget, parent=None) -> None:
     """Otevře stav probuzení; zjištění MAC a ověřovací pingy běží na pozadí."""
     for old in list(_wol_dialogs):
-        if old.ctrl is ctrl and old.target.id == target.id and old.busy():
+        if old.ctrl is ctrl and old.target.id == target.id and (old.busy() or old.isVisible()):
             old.show()
             old.raise_()
+            if not old.busy():
+                old.target = replace(target)
+                old.start()
             return
         if not old.isVisible() and not old.busy():
             _wol_dialogs.remove(old)
