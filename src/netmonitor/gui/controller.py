@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from dataclasses import replace
+from threading import Lock
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -69,8 +70,12 @@ class Controller(QObject):
         self.snapshots: dict[str, TargetSnapshot] = {}
         self._last_wan_ok = False
         self._wan_generation = 0
+        self._wan_inflight_generation: int | None = None
         self._wan_checked_generation: int | None = None
         self._wan_pending: bool | None = None   # sloučený refresh; hodnota = force_isp
+        self._wan_save_lock = Lock()
+        self._wan_save_seq = 0
+        self._wan_saved_seq = 0
 
         self._save_timer = QTimer(self, singleShot=True, interval=600, timeout=self._save_now)
         self._eval_timer = QTimer(self, singleShot=True, interval=400, timeout=self._evaluate)
@@ -135,6 +140,8 @@ class Controller(QObject):
                 self._handle_engine(key, res)
             return
         self._busy.discard(key)
+        if key == "wan":
+            self._wan_inflight_generation = None
         if done and not self._stopping and not isinstance(res, Exception):
             done(res)
         if key == "wan" and self._wan_pending is not None and not self._stopping:
@@ -157,10 +164,9 @@ class Controller(QObject):
         if old.network.wan_interval_s != self.cfg.network.wan_interval_s:
             self._wan_timer.setInterval(self.cfg.network.wan_interval_s * 1000)
         net_changed = (old.network.adapter_auto, old.network.adapter_name, old.network.external_api,
-                       old.network.isp_detection, old.network.isp_provider, old.network.isp_cache_hours) != \
+                       old.network.isp_detection, old.network.isp_provider) != \
                       (self.cfg.network.adapter_auto, self.cfg.network.adapter_name, self.cfg.network.external_api,
-                       self.cfg.network.isp_detection, self.cfg.network.isp_provider,
-                       self.cfg.network.isp_cache_hours)
+                       self.cfg.network.isp_detection, self.cfg.network.isp_provider)
         if net_changed:
             self._wan_generation += 1
         self._apply_targets()
@@ -228,6 +234,8 @@ class Controller(QObject):
 
     # ------------------------------------------------------------------ engine callbacks (worker vlákna!)
     def _engine_result(self, snap: TargetSnapshot, r: PingResult) -> None:
+        if not self.engine.is_current(snap.target_id, snap.generation):
+            return
         if snap.target_id != GATEWAY_ID:
             self.history.record(snap.target_id, r)
         self._deliver.emit(("__result__", None), (snap, r))
@@ -299,9 +307,11 @@ class Controller(QObject):
             self.wan_updated.emit(self.wan_info_dict(disabled=True))
             return
         if "wan" in self._busy:
-            self._wan_pending = bool(self._wan_pending or force_isp)
+            if force_isp or self._wan_inflight_generation != self._wan_generation:
+                self._wan_pending = bool(self._wan_pending or force_isp)
             return
         generation = self._wan_generation
+        self._wan_inflight_generation = generation
         # Worker nesmí zapsat cache/starý WAN stav ještě před kontrolou generace v GUI.
         wan = copy(self.wan)
         wan.isp_cache = self.wan.isp_cache.copy()
@@ -327,9 +337,21 @@ class Controller(QObject):
         self._last_wan_ok = bool(r.ip)
         self._wan_checked_generation = generation
         old = self.wan.current
-        changed = self.wan.update(r)
-        if cache_changed and old == self.wan.current:
-            self.wan.save()
+        changed = self.wan.update(r, persist=False)
+        if cache_changed or old != self.wan.current:
+            # Oddělený snapshot pro disk; starší zápis nesmí přepsat novější revizi.
+            state = copy(self.wan)
+            state.isp_cache = self.wan.isp_cache.copy()
+            self._wan_save_seq += 1
+            seq = self._wan_save_seq
+
+            def save():
+                with self._wan_save_lock:
+                    if seq > self._wan_saved_seq:
+                        state.save()
+                        self._wan_saved_seq = seq
+
+            self._run_bg(f"wan-save-{seq}", save)
         if r.ip:
             self.isp = isp if self.cfg.network.isp_detection else None
         if changed and r.ip:

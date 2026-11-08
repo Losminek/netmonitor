@@ -71,6 +71,15 @@ def change(ctrl, mode):
     ctrl.update_config(cfg, save=False)
 
 
+def wait_background(ctrl):
+    """Vyčká i na queued completion a případné navazující úlohy, nejen na worker."""
+    deadline = time.monotonic() + 3
+    while ctrl._busy and time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        threading.Event().wait(0.01)
+    assert not ctrl._busy, f"Nedokončené úlohy: {ctrl._busy}"
+
+
 @pytest.mark.parametrize("mode", ["remove", "host", "disable"])
 def test_queued_result_and_transition_are_discarded(ctrl, monkeypatch, mode):
     """Regrese B04: queued výsledek ani přechod nesmí oživit starou konfiguraci."""
@@ -82,6 +91,7 @@ def test_queued_result_and_transition_are_discarded(ctrl, monkeypatch, mode):
     probe(ctrl)
     change(ctrl, mode)
     QCoreApplication.processEvents()
+    wait_background(ctrl)
     assert "a" not in ctrl.snapshots
     assert emitted == transitions == latencies == events == []
 
@@ -355,7 +365,109 @@ def test_current_wan_and_isp_result_is_saved(ctrl, monkeypatch):
     assert updates and updates[-1]["ip"] == "198.51.100.10"
     assert updates[-1]["isp"] == "AS64500 Test"
     assert ctrl.wan.previous == "192.0.2.10" and ctrl._last_wan_ok
+    wait_background(ctrl)
     saved = json.loads(ctrl.wan.state_file.read_text(encoding="utf-8"))
     assert saved["current"] == "198.51.100.10"
     assert saved["isp_cache"]["198.51.100.10"][0] == "AS64500 Test"
     assert [n.kind for n in ctrl.notifier.tick()] == ["wan_change"]
+
+
+@pytest.mark.parametrize("force_isp,network_change", [(False, False), (True, False), (False, True)])
+def test_busy_wan_requeues_only_for_forced_refresh_or_network_change(ctrl, monkeypatch, force_isp, network_change):
+    """Regrese review L27: běžný busy refresh nesmí zdvojit externí dotazy."""
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def fetch():
+        calls.append(True)
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(3)
+        return WanResult(None, error="syntetický offline stav", ts=time.time())
+
+    monkeypatch.setattr(cmod, "fetch_wan_ip", fetch)
+    cfg = ctrl.cfg.copy()
+    cfg.network.external_api = True
+    ctrl.update_config(cfg, save=False)
+    try:
+        assert entered.wait(3)
+        if network_change:
+            ctrl.network = NetworkSnapshot(active=None)
+            ctrl._on_network(NetworkSnapshot(active=InterfaceInfo(name="Test", display_name="Test")))
+        for _ in range(5):
+            ctrl.refresh_wan(force_isp=force_isp)
+        release.set()
+        wait_background(ctrl)
+        assert len(calls) == (2 if force_isp or network_change else 1)
+    finally:
+        release.set()
+
+
+def test_isp_cache_hours_change_does_not_refresh_wan(ctrl, monkeypatch):
+    """Regrese review L27: spinbox stáří cache nevyvolává síťový refresh ani ISP lookup."""
+    calls = []
+    ctrl.cfg.network.external_api = True
+    monkeypatch.setattr(ctrl, "refresh_network", lambda: calls.append("network"))
+    monkeypatch.setattr(ctrl, "refresh_wan", lambda **kwargs: calls.append("wan"))
+    for hours in (25, 26, 27):
+        cfg = ctrl.cfg.copy()
+        cfg.network.isp_cache_hours = hours
+        ctrl.update_config(cfg, save=False)
+    assert calls == []
+
+
+def test_stale_engine_callback_does_not_record_history(ctrl, monkeypatch):
+    """Regrese review L27: callback staré generace nesmí zapsat měření do historie."""
+    stale = probe(ctrl)
+    QCoreApplication.processEvents()
+    calls = []
+    monkeypatch.setattr(ctrl.history, "record", lambda *args: calls.append(args))
+    original = ctrl.cfg.copy()
+    change(ctrl, "remove")
+    ctrl.update_config(original, save=False)
+    ctrl._engine_result(stale, stale.last)
+    assert calls == []
+    probe(ctrl)
+    assert len(calls) == 1, "aktuální generace se musí dál ukládat"
+
+
+def test_wan_saves_copies_in_background_and_keeps_latest_state(ctrl, monkeypatch):
+    """Regrese review L27: ani změna IP, ani ISP cache nesmí ukládat na GUI vlákně."""
+    entered, release = threading.Event(), threading.Event()
+    saved, threads = [], []
+    gui_thread = threading.get_ident()
+    original = cmod.WanState.save
+
+    def save(state):
+        if state.state_file is None:
+            return original(state)
+        threads.append(threading.get_ident())
+        if len(threads) == 1:
+            entered.set()
+            assert release.wait(3)
+        saved.append((state.current, state.isp_cache.copy()))
+        original(state)
+
+    monkeypatch.setattr(cmod.WanState, "save", save)
+    ctrl.cfg.network.external_api = True
+    generation = ctrl._wan_generation
+
+    def complete(ip, name):
+        ctrl._on_wan((WanResult(ip, ts=time.time()), name, {ip: (name, time.time())}), generation)
+
+    # Nová IP (save uvnitř update), pak dvě změny cache při stejném IP.
+    complete("192.0.2.10", "AS64500 První")
+    try:
+        assert entered.wait(3)
+        assert threads == [threads[0]] and threads[0] != gui_thread
+        complete("192.0.2.10", "AS64500 Druhý")
+        complete("192.0.2.10", "AS64500 Poslední")
+        release.set()
+        wait_background(ctrl)
+        assert all(t != gui_thread for t in threads)
+        assert saved[0][1]["192.0.2.10"][0] == "AS64500 První"
+        assert saved[-1][1]["192.0.2.10"][0] == "AS64500 Poslední"
+        state = json.loads(ctrl.wan.state_file.read_text(encoding="utf-8"))
+        assert state["isp_cache"]["192.0.2.10"][0] == "AS64500 Poslední"
+    finally:
+        release.set()
