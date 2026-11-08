@@ -69,7 +69,8 @@ Section: net
 Priority: optional
 Architecture: amd64
 Depends: libxcb-cursor0, libxkbcommon-x11-0, libegl1, libgl1, iputils-ping
-Recommends: traceroute, network-manager
+Recommends: traceroute
+Suggests: network-manager
 Maintainer: Marceli Zelina <noreply@zelina.eu>
 Description: NetMonitor - desktopovy sitovy monitor (widget)
  Transparentni widget s WAN/LAN informacemi, DNS a paralelnim ICMP monitoringem.
