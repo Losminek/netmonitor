@@ -1,5 +1,8 @@
 # Změny
 
+## 1.3.2
+- Oprava: zapnutí/vypnutí cíle zaškrtávátkem v Nastavení mohlo shodit aplikaci (strom se překresloval uprostřed zpracování kliknutí)
+
 ## 1.3.1
 - Oprava: traceroute na Windows mohl po několika skocích shodit celou aplikaci. Nově běží přes systémový `tracert` v samostatném procesu.
 - Větší rezerva pro odpovědi ICMP na Windows (chybové odpovědi routerů s citovaným paketem)

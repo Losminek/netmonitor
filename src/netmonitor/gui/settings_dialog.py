@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QUrl, Qt, Signal
+from PySide6.QtCore import QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
@@ -314,7 +314,11 @@ class SettingsDialog(QDialog):
             return
         cfg = self.ctrl.cfg.copy()
         fn(cfg)
-        self.ctrl.update_config(cfg)
+        self._applying = True
+        try:
+            self.ctrl.update_config(cfg)
+        finally:
+            self._applying = False
 
     def _setter(self, section: str, key: str, conv=lambda v: v):
         return lambda v: self._apply(lambda c: setattr(getattr(c, section), key, conv(v)))
@@ -339,9 +343,18 @@ class SettingsDialog(QDialog):
     _binds: list = []
 
     def _on_external_change(self, cfg: AppConfig) -> None:
-        if not self.isVisible() or self._loading:
+        # změna vyvolaná tímto dialogem: ovládací prvky už odpovídají. Synchronní znovunačtení by navíc
+        # smazalo položku stromu, jejíž signál (např. zaškrtnutí) se právě zpracovává -> pád (use-after-free).
+        if not self.isVisible() or self._loading or getattr(self, "_applying", False):
             return
-        self.load()
+        if not getattr(self, "_reload_pending", False):
+            self._reload_pending = True
+
+            def later():
+                self._reload_pending = False
+                if self.isVisible() and not self._loading:
+                    self.load()
+            QTimer.singleShot(0, later)
 
     def load(self) -> None:
         """Načte hodnoty z aktuální konfigurace do ovládacích prvků (bez vyvolání změn)."""
