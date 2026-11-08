@@ -48,14 +48,25 @@ def test_snapshot_with_mock_screens_and_environment():
     ("QT_ENABLE_HIGHDPI_SCALING", "private", "[redacted]"),
     ("QT_QPA_PLATFORM", "xcb:private=/home/private;wayland", "xcb;wayland"),
     ("QT_QPA_PLATFORM", "/home/private", "[redacted]"),
-    ("XDG_CURRENT_DESKTOP", "GNOME:private", "GNOME:[redacted]"),
-    ("XDG_SESSION_TYPE", "private", "[redacted]"),
+    ("XDG_CURRENT_DESKTOP", "GNOME:/home/private", "GNOME:[redacted]"),
+    ("XDG_SESSION_TYPE", "/home/private", "[redacted]"),
 ])
 def test_environment_never_copies_private_parameters(key, value, expected):
     result = diag._safe_environment({key: value, "QT_PLUGIN_PATH": "/home/private"})
     assert result[key] == expected
     assert "private" not in json.dumps(result)
     assert "QT_PLUGIN_PATH" not in result
+
+
+def test_custom_session_and_desktop_tokens_and_empty_list_parts():
+    result = diag._safe_environment({"XDG_SESSION_TYPE": "custom-session_2", "XDG_CURRENT_DESKTOP": "NewWM:GNOME:",
+                                     "QT_SCREEN_SCALE_FACTORS": ";monitor-name=1.25;;2;",
+                                     "QT_QPA_PLATFORM": ";xcb;;wayland;"})
+    assert result["XDG_SESSION_TYPE"] == "custom-session_2"
+    assert result["XDG_CURRENT_DESKTOP"] == "NewWM:GNOME"
+    assert result["QT_SCREEN_SCALE_FACTORS"] == "1.25;2"
+    assert result["QT_QPA_PLATFORM"] == "xcb;wayland"
+    assert diag._safe_environment({"XDG_SESSION_TYPE": "x" * 33})["XDG_SESSION_TYPE"] == "[redacted]"
 
 
 def test_empty_environment_and_no_screens():
@@ -123,37 +134,57 @@ def test_x11_unavailable_is_unknown(monkeypatch, failure):
     assert diag._x11_compositing(app) == "neznámo"
 
 
-def test_collector_offscreen(monkeypatch):
+@pytest.mark.parametrize("fallback", [None, "cursor", "other"])
+def test_collector_offscreen(monkeypatch, fallback):
     app = QApplication.instance() or QApplication([])
     assert isinstance(app, QApplication)
     monkeypatch.setenv("DISPLAY", "private-display")
     monkeypatch.setenv("WAYLAND_DISPLAY", "/run/user/private/wayland")
-    result = diag.collect_gui_diagnostics(app)
+    previous = app.property("xcb_fallback")
+    app.setProperty("xcb_fallback", fallback)
+    try:
+        result = diag.collect_gui_diagnostics(app, tray_available=False, platform_selected_by_app="xcb;wayland")
+    finally:
+        app.setProperty("xcb_fallback", previous)
     assert result["qt_platform"] == "offscreen"
     assert result["screens"] and result["qt_version"] and result["pyside_version"]
     assert result["compositing"] == "neznámo"
+    assert result["platform_selected_by_app"] == "xcb;wayland"
+    assert result["xcb_fallback"] == fallback
+    assert result["tray_available"] is False
     assert "private" not in json.dumps(result)
 
 
-@pytest.mark.parametrize("flags", [["--diagnose"], ["--diagnose-gui"], ["--diagnose", "--diagnose-gui"]])
-def test_diagnostic_cli_modes(tmp_path, flags):
+def _run_main(tmp_path, flags, *, setup="", environment=None):
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"network": {"external_api": False}, "ping": {"targets": []}}))
+    config.write_text(json.dumps({"network": {"external_api": False, "gateway_probe": False},
+                                  "general": {"check_updates": False}, "ping": {"targets": []}}))
     # Bez sítě a bez údajů lokálních rozhraní i u původního --diagnose.
     code = """
 import sys
 from unittest.mock import patch
 from netmonitor.core.network_info import NetworkSnapshot
 from netmonitor.main import main
-if '--diagnose-gui' not in sys.argv:
+if '--diagnose' in sys.argv and '--diagnose-gui' not in sys.argv:
     sys.modules['PySide6'] = None  # původní CLI musí fungovat i bez Qt
+""" + setup + """
 with patch('netmonitor.core.network_info.NetworkInfoProvider.snapshot', return_value=NetworkSnapshot(active=None)):
     raise SystemExit(main(sys.argv[1:]))
 """
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen",
                PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
-    process = subprocess.run([sys.executable, "-c", code, *flags, "--config", str(config)],
-                             env=env, capture_output=True, text=True, timeout=20)
+    if environment is not None:
+        env = environment
+    return subprocess.run([sys.executable, "-c", code, *flags, "--config", str(config)],
+                          env=env, capture_output=True, text=True, timeout=20)
+
+
+@pytest.mark.parametrize("flags", [["--diagnose"], ["--diagnose-gui"], ["--diagnose", "--diagnose-gui"]])
+def test_diagnostic_cli_modes(tmp_path, flags):
+    setup = ""
+    if "--diagnose-gui" in flags:
+        setup = "patch('PySide6.QtWidgets.QSystemTrayIcon.isSystemTrayAvailable', side_effect=[False]).start()\n"
+    process = _run_main(tmp_path, flags, setup=setup)
     assert process.returncode == 0, process.stderr
     output = json.loads(process.stdout)
     assert ("gui" in output) == ("--diagnose-gui" in flags)
@@ -161,3 +192,50 @@ with patch('netmonitor.core.network_info.NetworkInfoProvider.snapshot', return_v
     assert ("GUI diagnostika: " in process.stderr) == ("--diagnose-gui" in flags)
     if "gui" in output:
         assert output["gui"]["qt_platform"] == "offscreen"
+        assert output["gui"]["platform_selected_by_app"] is None
+        assert output["gui"]["xcb_fallback"] is None
+
+
+@pytest.mark.parametrize("failure", ["collector", "json"])
+def test_diagnostic_failure_does_not_stop_startup(tmp_path, failure):
+    """Regrese review L10: výjimka z diagnostiky nesmí zastavit spuštění widgetu."""
+    setup = "patch('PySide6.QtWidgets.QSystemTrayIcon.isSystemTrayAvailable', side_effect=[False]).start()\n"
+    if failure == "collector":
+        setup += "patch('netmonitor.gui.diag.collect_gui_diagnostics', side_effect=RuntimeError('private failure')).start()\n"
+    else:
+        setup += "patch('netmonitor.gui.diag.collect_gui_diagnostics', return_value={'bad': object()}).start()\n"
+    screenshot = tmp_path / "widget.png"
+    process = _run_main(tmp_path, ["--debug", "--screenshot", str(screenshot), "--screenshot-delay", "0.05"], setup=setup)
+    assert process.returncode == 0, process.stderr
+    assert screenshot.is_file()
+    assert "DEBUG" in process.stderr and "Sběr GUI diagnostiky selhal" in process.stderr
+    assert "Konec (0)" in process.stderr
+
+
+@pytest.mark.parametrize("flags", [["--diagnose-gui"], ["--diagnose", "--diagnose-gui"]])
+def test_diagnostic_collector_error_is_safe_json(tmp_path, flags):
+    setup = "patch('netmonitor.gui.diag.collect_gui_diagnostics', side_effect=RuntimeError('/home/private')).start()\n"
+    process = _run_main(tmp_path, flags, setup=setup)
+    assert process.returncode == 2, process.stderr
+    output = json.loads(process.stdout)
+    error = output["gui"] if "--diagnose" in flags else output
+    assert error == {"error": "Sběr GUI diagnostiky selhal"}
+    assert "private" not in process.stdout and "private" not in process.stderr
+
+
+@pytest.mark.parametrize("flags", [["--diagnose-gui"], ["--diagnose", "--diagnose-gui"]])
+def test_gui_diagnostic_without_display_never_loads_qt(tmp_path, flags):
+    """Regrese review L10: na headless Linuxu návratový kód 2 místo nativního abortu Qt."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("Ochrana před inicializací Qt se týká Linuxu")
+    env = {"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+           "NETMONITOR_HOME": str(tmp_path / "home"), "PATH": os.defpath}
+    process = _run_main(tmp_path, flags, setup="sys.modules['PySide6'] = None\n", environment=env)
+    assert process.returncode == 2, process.stderr
+    output = json.loads(process.stdout)
+    if "--diagnose" in flags:
+        assert "network" in output
+        assert output["gui"] == {"error": "bez grafické relace"}
+    else:
+        assert output == {"error": "bez grafické relace"}
+    assert "bez grafické relace" in process.stderr
