@@ -40,3 +40,18 @@ Kontrola při startu (po 20 s) a každých 6 hodin. Zdroj (pole „Zdroj aktuali
 Automatická instalace (jen nainstalovaná verze pro Windows): stáhne `NetMonitor-<verze>-setup.exe`, ověří
 **SHA-256** (u GitHubu pole `digest` souboru, u manifestu `sha256`) – bez shody nic neinstaluje –, spustí
 tichou instalaci Inno Setup (`/VERYSILENT`, bez práv správce) a instalátor aplikaci znovu spustí.
+
+## Test rychlosti (jen na vyžádání – tlačítko „Test rychlosti internetu“)
+
+| Účel | Dotaz | Poznámka |
+|---|---|---|
+| odezva a jitter | `GET https://speed.cloudflare.com/__down?bytes=0` (opakovaně) | od odezvy se odečítá čas serveru (`server-timing`) |
+| stahování | `GET https://speed.cloudflare.com/__down?bytes=…` (6 souběžných spojení, ~8 s) | náběh TCP se do výsledku nepočítá |
+| nahrávání | `POST https://speed.cloudflare.com/__up` (4 souběžná spojení, ~8 s) | odesílají se jen náhodná data |
+
+Jeden test přenese řádově stovky MB (podle rychlosti linky). Nikdy se nespouští automaticky.
+
+## Nástroje bez externích služeb
+
+Traceroute (systémový `tracert` / `traceroute` / `tracepath`) a Wake-on-LAN (UDP broadcast v místní síti)
+nekomunikují s žádnou službou třetí strany.

@@ -11,7 +11,13 @@ src/netmonitor/
 │   ├── network_info.py     aktivní rozhraní (výchozí trasa), LAN IP, brána, rychlost linky, Wi-Fi, DNS
 │   ├── wan_info.py         WAN IPv4 (4 poskytovatelé s fallbackem), ISP (ipinfo / RIPEstat), cache, změny
 │   ├── history.py          SQLite (WAL), minutové agregace, dávkový zápis, události, migrace, CSV export
-│   └── notifier.py         logika upozornění: prodleva, cooldown, bez zahlcení
+│   ├── notifier.py         logika upozornění: prodleva, cooldown, bez zahlcení
+│   ├── target_order.py     sekce a pořadí cílů (vkládání, přesuny bloků)
+│   ├── ipconfig.py         nastavení IP karty: validace, profily, příkazy netsh / nmcli / networksetup
+│   ├── updater.py          kontrola a stažení aktualizace (GitHub Releases / JSON manifest, SHA-256)
+│   ├── traceroute.py       tracert / traceroute / tracepath v samostatném procesu, parsování po skocích
+│   ├── wol.py              Wake-on-LAN (magic packet), MAC z ARP tabulky
+│   └── speedtest.py        test rychlosti (Cloudflare), souběžná spojení, odezva a jitter
 ├── platform/               OS-specifické adaptéry
 │   ├── windows.py          GetAdaptersAddresses (ctypes), netsh wlan, HKCU\…\Run, HWND_BOTTOM
 │   ├── linux.py            /proc/net/route, resolvectl/nmcli/resolv.conf, nmcli/iw, XDG autostart
@@ -22,7 +28,10 @@ src/netmonitor/
 │   ├── network_panel.py    horní část (síťové informace)
 │   ├── ping_panel.py       dolní část (řádky cílů – každý se překresluje samostatně)
 │   ├── settings_dialog.py  nastavení (6 záložek), živé promítání změn
-│   ├── history_dialog.py   graf, statistiky, události, export CSV
+│   ├── history_dialog.py   graf, statistiky, události, export CSV, nástroje cíle
+│   ├── ipconfig_dialog.py  nastavení IP adresy karty (DHCP / pevná IP / DNS, profily)
+│   ├── updater_ui.py       odznak a dialog aktualizace, O aplikaci
+│   ├── tools_dialog.py     okna traceroute a testu rychlosti, Wake-on-LAN
 │   ├── tray.py             ikona v oznamovací oblasti, notifikace
 │   ├── theme.py · widgets.py · icons.py · i18n.py
 └── resources/              písma (OFL), ikony

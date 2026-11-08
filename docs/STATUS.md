@@ -1,4 +1,4 @@
-# Stav projektu – verze 1.2.0 (8. 11. 2026)
+# Stav projektu – verze 1.3.3 (8. 11. 2026)
 
 Vývoj a ověřování proběhlo v **Linuxu (Ubuntu 24.04, Python 3.13, PySide6 6.12)** bez fyzické Wi-Fi a bez
 skutečného displeje (Qt offscreen).
@@ -32,11 +32,17 @@ macOS: zatím ověřuje jen CI (GitHub Actions, macos-latest + macos-15-intel).
 | 1.1.0: nastavení IP síťové karty (DHCP / pevná IP / DNS, profily, kontrola obsazené IP) | ✔ – Windows: netsh přes UAC (-EncodedCommand), Linux: nmcli, macOS: networksetup |
 | 1.2.0: automatické aktualizace (GitHub Releases / JSON manifest, SHA-256, tichá instalace, odznak ve widgetu a liště) | ✔ – vyžaduje veřejně dostupný zdroj |
 | 1.2.0: výchozí neprůhledné pozadí, posuvník průhlednosti pozadí 0–100 %, „O aplikaci“ s odkazem na zelina.eu/projekty | ✔ |
+| 1.3: Wake-on-LAN (MAC u cíle, dohledání v ARP), traceroute (systémový tracert/traceroute v samostatném procesu), test rychlosti (Cloudflare) | ✔ – traceroute ověřen uživatelem na Windows 11 |
+| 1.3: číslo verze s odkazem na zelina.eu/projekty v tabu vpravo nahoře, `crash.log` při tvrdém pádu | ✔ |
+| Vydávání: GitHub Actions (Windows, Ubuntu 22.04, macOS arm64 + Intel), release se založí sám po zvýšení verze | ✔ |
 | Build: PyInstaller spec, Windows (ZIP + Inno Setup), Linux (tar.gz, .deb, AppImage), macOS (.app, DMG) | ✔ |
 
-## Otestováno (automaticky, Linux)
+**Ověřeno uživatelem na Windows 11 (8. 11. 2026):** automatická aktualizace z widgetu (1.3.0 → 1.3.2 → 1.3.3: stažení, ověření SHA-256, tichá instalace, restart),
+traceroute až do cíle.
 
-130 testů (`pytest`; na Linuxu 128 proběhne, 2 jsou jen pro Windows): validace IPv4/IPv6/domén, konfigurace (load/save/clamp/migrace/import/export),
+## Otestováno (automaticky – Linux a CI na Windows/macOS)
+
+Přes 200 testů (`pytest`; několik jen pro Windows): validace IPv4/IPv6/domén, konfigurace (load/save/clamp/migrace/import/export),
 parsování výstupu ping (Linux, Windows CZ/EN, macOS, unreachable s rc=0), bezpečné argumenty, úspěšný ping,
 timeout, nedostupný host, DNS chyba, packet loss, přechody ONLINE/OFFLINE, paralelismus (pomalý cíl neblokuje),
 žádné souběžné požadavky na jeden cíl, bezpečné ukončení bez zbylých vláken, historie (agregace, UPSERT,
@@ -57,6 +63,8 @@ z buildu, vykreslení widgetu (offscreen) a porovnání s návrhem.
 | Skutečný kompozitor (průhlednost nad plochou, X11/Wayland chování) | ověřeno jen offscreen render |
 | Skutečná Wi-Fi (SSID/signál) | parsování otestováno na vzorcích výstupů |
 | Nastavení IP na skutečném Windows | generované netsh příkazy otestovány automaticky; reálné použití přes UAC ověří uživatel |
+| Wake-on-LAN a test rychlosti na Windows | logika otestována automaticky (test rychlosti i živě v Linuxu) |
+| Podpis kódu (Windows SmartScreen) | instalátor není podepsaný – viz README, sekce Instalace |
 | Uspání/probuzení v praxi | logika implementována, nebyla fyzicky vyzkoušena |
 | IPv6 ping na Windows přes nativní API | zatím přes `ping -6`; Icmp6SendEcho2 = budoucí rozšíření |
 | WAN IPv6 | připraveno (seznam poskytovatelů), neaktivní |
