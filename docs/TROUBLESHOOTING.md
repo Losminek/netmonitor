@@ -12,6 +12,14 @@ Vypíše JSON: aktivní rozhraní, brána, DNS (+ zdroj), Wi-Fi, použitá ICMP 
 WAN IP a ISP. Pozn.: GUI build (`console=False`) na Windows nemá konzoli – pro diagnostiku spusťte
 `NetMonitor.exe --diagnose > diag.json` v PowerShellu, nebo použijte verzi ze zdrojů.
 
+Při černém pozadí, rozmazání nebo ořezu spusťte `netmonitor --diagnose-gui` ve stejné desktopové relaci jako widget:
+sekce `gui` obsahuje platformu Qt, verze, škálování, DPI, dostupnost tray a na X11 vlastníky selekcí kompozitoru
+(jinak „neznámo“); stejný blok se při běžném startu zapisuje na úrovni INFO do logu.
+Přepínač inicializuje Qt bez vynucení offscreen a bez síťových dotazů, zatímco samotné `--diagnose` zůstává bez Qt;
+kombinace `--diagnose --diagnose-gui` přidá GUI sekci k původní síťové diagnostice.
+GUI blok neuvádí adresy displejů ani jména monitorů, neznámé hodnoty prostředí a případné osobní části parametrů
+anonymizuje; původní síťová část kombinovaného výpisu nadále obsahuje IP a údaje rozhraní.
+
 ## 2. Logy
 
 Rotující log `netmonitor.log` (max. 3 × 1 MB): viz tabulka v README. `--debug` zapne podrobné logování.
