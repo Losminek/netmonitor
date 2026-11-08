@@ -94,6 +94,9 @@ class TracerouteDialog(QDialog):
         self._thread = threading.Thread(target=job, name="traceroute", daemon=True)
         self._thread.start()
 
+    def busy(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
     def _add_hop(self, hop: traceroute.Hop) -> None:
         self.hops.append(hop)
         r = self.table.rowCount()
@@ -252,6 +255,22 @@ def _fmt_speed(v) -> str:
 
 
 # ---------------------------------------------------------------------------- Wake-on-LAN
+
+# Otevřená okna traceroute. Okno musí mít trvalý odkaz: bez něj by ho Python zrušil ve chvíli, kdy doběhne
+# pracovní vlákno (poslední odkaz drží jeho closure) – tedy mimo GUI vlákno, což shodí celou aplikaci.
+_trace_dialogs: list[TracerouteDialog] = []
+
+
+def open_traceroute(ctrl, target: PingTarget) -> TracerouteDialog:
+    for old in [d for d in _trace_dialogs if not d.isVisible() and not d.busy()]:
+        _trace_dialogs.remove(old)
+        old.deleteLater()                      # rušení v GUI vlákně a až po doběhnutí vlákna
+    d = TracerouteDialog(ctrl, target)
+    _trace_dialogs.append(d)
+    d.show()
+    d.start()
+    return d
+
 
 def wake(ctrl, target: PingTarget, parent=None) -> None:
     """Probudí zařízení. Bez MAC zkusí najít adresu v ARP tabulce a nabídne její uložení."""

@@ -1,5 +1,8 @@
 # Změny
 
+## 1.3.3
+- Oprava skutečné příčiny pádu po traceroute: okno traceroute nemělo trvalý odkaz a po doběhnutí trasy ho Python rušil mimo hlavní vlákno, což shodilo celou aplikaci
+
 ## 1.3.2
 - Oprava: zapnutí/vypnutí cíle zaškrtávátkem v Nastavení mohlo shodit aplikaci (strom se překresloval uprostřed zpracování kliknutí)
 

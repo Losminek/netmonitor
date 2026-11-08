@@ -245,7 +245,7 @@ def test_row_context_menu_and_tool_dialogs(ctrl, monkeypatch):
     td = tools.TracerouteDialog(ctrl, ctrl.cfg.target_by_id("z"))
     td.start()
     pump(0.5)
-    assert td.table.rowCount() == 3 and "dosažen" in td.status.text()
+    assert td.table.rowCount() == 3 and "dosažen" in td.status.text() and not td.busy()
     td.close()
     # test rychlosti – výsledek do UI a do historie
     sd = tools.SpeedTestDialog(ctrl)
@@ -257,3 +257,27 @@ def test_row_context_menu_and_tool_dialogs(ctrl, monkeypatch):
     # menu widgetu má test rychlosti
     menu = w.build_menu()
     assert any("Test rychlosti" in a.text() for a in menu.actions())
+
+
+def test_traceroute_window_survives_thread_end(ctrl, monkeypatch):
+    """Regrese 1.3.0–1.3.2: okno bez trvalého odkazu zrušil Python po doběhnutí vlákna => pád aplikace."""
+    import time
+
+    from netmonitor.core import traceroute as tr
+    from netmonitor.gui import tools_dialog as tools
+
+    def fake(host, on_hop, **kw):
+        for i in range(1, 5):
+            time.sleep(0.15)
+            on_hop(tr.Hop(i, f"10.0.0.{i}", [1.0, 1.0, 1.0]))
+        return "10.0.0.4", ""
+    monkeypatch.setattr(tr, "run", fake)
+    tools._trace_dialogs.clear()
+    tools.open_traceroute(ctrl, ctrl.cfg.target_by_id("z"))      # bez uložení odkazu – jako v aplikaci
+    pump(0.4)
+    tools._trace_dialogs[0].close()                               # zavření během běhu
+    pump(1.5)
+    d = tools.open_traceroute(ctrl, ctrl.cfg.target_by_id("z"))   # úklid starého okna + nové
+    pump(1.5)
+    assert tools._trace_dialogs == [d] and d.table.rowCount() == 4 and not d.busy()
+    d.close()

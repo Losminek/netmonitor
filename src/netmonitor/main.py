@@ -185,12 +185,8 @@ def main(argv=None) -> int:
 
     def traceroute(tid: str):
         t = ctrl.cfg.target_by_id(tid)
-        if not t or t.is_section:
-            return
-        d = tools.TracerouteDialog(ctrl, t)
-        d.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        d.show()
-        d.start()
+        if t and not t.is_section:
+            tools.open_traceroute(ctrl, t)
 
     def wake(tid: str):
         t = ctrl.cfg.target_by_id(tid)

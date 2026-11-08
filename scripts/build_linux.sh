@@ -9,7 +9,7 @@
 # Systémové závislosti Qt (Debian/Ubuntu): libxcb-cursor0 libxkbcommon-x11-0 libegl1
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VER=1.3.2
+VER=1.3.3
 SKIP_TESTS=0; DEB=0; APPIMAGE=0
 for a in "$@"; do
   case "$a" in --skip-tests) SKIP_TESTS=1;; --deb) DEB=1;; --appimage) APPIMAGE=1;; esac
