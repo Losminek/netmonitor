@@ -33,6 +33,7 @@ GATEWAY_ID = "__gateway__"
 
 
 class Controller(QObject):
+    shutdown_started = Signal()
     target_result = Signal(object, object)      # TargetSnapshot, PingResult
     targets_changed = Signal()
     network_updated = Signal(object)            # NetworkSnapshot
@@ -102,6 +103,7 @@ class Controller(QObject):
         deadline = started + 2.0
         log.info("Ukončuji…")
         self._stopping = True
+        self.shutdown_started.emit()
         for t in (self._net_timer, self._wan_timer, self._flush_timer, self._notify_timer, self._purge_timer,
                   self._eval_timer, self._save_timer):
             t.stop()
@@ -114,8 +116,10 @@ class Controller(QObject):
         ip = self._ip_future
         if ip is not None and not ip.cancel() and not ip.done():
             log.info("Čekám na dokončení probíhající změny IP…")
-            ip.result()
-        self.engine.stop(timeout=max(0, deadline - time.monotonic()))
+            try:
+                ip.result()
+            except Exception:  # noqa: BLE001 – úklid musí proběhnout i při selhání Future
+                log.exception("Čekání na změnu IP selhalo")
         self._bg.shutdown(wait=False, cancel_futures=True)
 
         def close_history():
@@ -133,6 +137,8 @@ class Controller(QObject):
 
         cleanup = threading.Thread(target=close_history, daemon=True, name="history-close")
         cleanup.start()
+        # Historie má čas na flush souběžně s čekáním na blokované pingy/DNS.
+        self.engine.stop(timeout=max(0, deadline - time.monotonic()))
         cleanup.join(max(0, deadline - time.monotonic()))
         if cleanup.is_alive():
             log.warning("Historie se ještě uzavírá na pozadí")

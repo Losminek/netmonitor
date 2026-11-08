@@ -75,6 +75,7 @@ class MainWidget(QWidget):
     def __init__(self, ctrl: Controller):
         super().__init__(None)
         self.ctrl = ctrl
+        ctrl.shutdown_started.connect(self.hide)
         self.setWindowTitle("NetMonitor")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)

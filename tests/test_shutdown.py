@@ -6,6 +6,7 @@ import textwrap
 import threading
 import time
 import weakref
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -244,7 +245,8 @@ def test_process_exits_with_blocked_dns_and_background(tmp_path):
         print("shutdown dokončen", flush=True)
         # Event se záměrně neuvolní: testujeme konec interpreteru s visícími workery.
     ''')
-    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root / "src"), str(root))))
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)], env=env,
                             capture_output=True, text=True, timeout=6)
     assert result.returncode == 0, result.stderr
@@ -318,6 +320,114 @@ def test_pending_probes_run_after_restart(ctrl, monkeypatch):
     finally:
         release.set()
         ctrl.engine.stop(timeout=1)
+
+
+def test_shutdown_flushes_history_before_waiting_for_dns(ctrl, monkeypatch):
+    """Regrese N3: čekání na DNS nesmí spotřebovat čas historie před jejím flushem."""
+    entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+    close = ctrl.history.close
+    stop = ctrl.engine.stop
+
+    def hang(*_args):
+        entered.set()
+        release.wait()
+        return None, "Test"
+
+    def close_history():
+        try:
+            close()
+        finally:
+            closed.set()
+
+    def stop_engine(timeout):
+        # Úklid historie musí už běžet, když teprve vstupujeme do engine.stop().
+        assert closed.wait(0.5)
+        stop(timeout=timeout)
+
+    monkeypatch.setattr(ctrl.resolver, "resolve", hang)
+    monkeypatch.setattr(ctrl.history, "close", close_history)
+    monkeypatch.setattr(ctrl.engine, "stop", stop_engine)
+    ctrl.history.record("test", PingResult(PingStatus.OK, rtt_ms=1))
+    ctrl.engine.set_targets(ctrl.cfg.real_targets())
+    ctrl.engine.start()
+    try:
+        assert entered.wait(2)
+        ctrl.shutdown()
+        assert closed.is_set()
+        import sqlite3
+        with sqlite3.connect(ctrl.history.path) as conn:
+            assert conn.execute("SELECT sum(n_ok) FROM samples_1m").fetchone()[0] == 1
+    finally:
+        release.set()
+        stop(timeout=1)
+        if not closed.is_set():
+            close()
+
+
+def test_ip_future_error_hides_widget_and_still_cleans_up(ctrl, monkeypatch, caplog):
+    """Regrese N4: výjimka čekajícího Future nesmí obejít skrytí UI ani úklid."""
+    from netmonitor.gui.main_widget import MainWidget
+
+    widget = MainWidget(ctrl)
+    widget.show()
+    assert widget.isVisible()
+    ctrl.engine.start()
+    future = Future()
+    assert future.set_running_or_notify_cancel()
+    ctrl._ip_future = future
+    closed = threading.Event()
+    close = ctrl.history.close
+    hidden_before_wait = []
+
+    def fail_result():
+        hidden_before_wait.append(not widget.isVisible())
+        raise RuntimeError("Test selhání IP Future")
+
+    def close_history():
+        close()
+        closed.set()
+
+    monkeypatch.setattr(future, "result", fail_result)
+    monkeypatch.setattr(ctrl.history, "close", close_history)
+    with caplog.at_level("INFO"):
+        ctrl.shutdown()
+    assert "Čekání na změnu IP selhalo" in caplog.text
+    assert "Test selhání IP Future" in caplog.text
+    assert "Monitoring ukončen za" in caplog.text
+    assert hidden_before_wait == [True]
+    assert not ctrl.engine.running
+    assert closed.wait(1)
+    with pytest.raises(RuntimeError):
+        ctrl._bg.submit(lambda: None)
+
+
+def test_shutdown_config_oserror_is_logged_and_cleanup_continues(ctrl, monkeypatch, caplog):
+    """Regrese N6: OSError posledního zápisu se zaloguje a nezastaví ukončení."""
+    closed = threading.Event()
+    close = ctrl.history.close
+
+    def fail_save(_cfg, _path):
+        raise OSError("Test nedostupného disku")
+
+    def close_history():
+        close()
+        closed.set()
+
+    monkeypatch.setattr(cfgmod, "save_config", fail_save)
+    monkeypatch.setattr(ctrl.history, "close", close_history)
+    ctrl.cfg.appearance.locked = True
+    ctrl.schedule_save()
+    ctrl.engine.start()
+    with caplog.at_level("INFO"):
+        ctrl.shutdown()
+    assert "Poslední konfiguraci se nepodařilo uložit" in caplog.text
+    assert "Test nedostupného disku" in caplog.text
+    assert "Monitoring ukončen za" in caplog.text
+    assert not ctrl.engine.running
+    assert closed.wait(1)
+    assert cfgmod.load_config(ctrl.config_path).appearance.locked is False
+    with pytest.raises(RuntimeError):
+        ctrl._bg.submit(lambda: None)
 
 
 def test_stop_deadline_includes_retired_pools(ctrl, monkeypatch):
