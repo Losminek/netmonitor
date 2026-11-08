@@ -143,6 +143,7 @@ class Controller(QObject):
         old = self.cfg
         self.cfg = cfg.normalized()
         if old == self.cfg:
+            self.config_changed.emit(self.cfg)
             return
         if old.notifications != self.cfg.notifications:
             self.notifier.update_config(self.cfg.notifications)

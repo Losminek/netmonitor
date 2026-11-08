@@ -140,3 +140,95 @@ def test_changed_target_and_gateway_still_dispatch(controller):
         cfg.network.gateway_probe = False
         controller.update_config(cfg, save=False)
         assert targets.call_count == 2
+
+
+def test_checked_glass_menu_action_stays_checked_on_noop(controller):
+    """Regrese N1: opakovaná volba stejného krytí obnoví zaškrtnutí tray menu."""
+    from PySide6.QtWidgets import QMenu
+
+    from netmonitor.gui.tray import Tray
+
+    w = MainWidget(controller)
+    tray = Tray(w)
+    changed = Mock()
+    controller.config_changed.connect(changed)
+
+    def glass_actions():
+        menu = tray.contextMenu()
+        assert menu is not None
+        submenu = next(a.menu() for a in menu.actions() if a.text() == "Průhlednost pozadí")
+        assert isinstance(submenu, QMenu)
+        return submenu.actions()
+
+    try:
+        selected = next(a for a in glass_actions() if a.isChecked())
+        text = selected.text()
+        with (patch.object(controller.engine, "set_targets") as targets,
+              patch.object(controller.history, "upsert_targets") as upsert):
+            selected.trigger()
+            assert next(a for a in glass_actions() if a.text() == text).isChecked()
+            assert changed.call_count == 1
+            assert not controller._save_timer.isActive()
+            targets.assert_not_called()
+            upsert.assert_not_called()
+    finally:
+        tray.deleteLater()
+        w.close()
+
+
+def test_section_heading_change_only_updates_target_rows(controller):
+    """Regrese G01: samotný nadpis sekce vyšle signál bez zásahu do enginu či DB."""
+    from netmonitor.core.config import new_section
+
+    cfg = controller.cfg.copy()
+    cfg.ping.targets.insert(0, new_section("Původní nadpis"))
+    controller.update_config(cfg, save=False)
+    w = MainWidget(controller)
+    changed = Mock()
+    controller.targets_changed.connect(changed)
+    try:
+        with (patch.object(controller.engine, "set_targets") as targets,
+              patch.object(controller.history, "upsert_targets") as upsert):
+            cfg = controller.cfg.copy()
+            cfg.ping.targets[0].name = "Nový nadpis"
+            controller.update_config(cfg, save=False)
+            assert changed.call_count == 1
+            assert w.ping.sections[cfg.ping.targets[0].id].target.name == "Nový nadpis"
+            targets.assert_not_called()
+            upsert.assert_not_called()
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize("slider", ["opacity", "glass"])
+def test_slider_updates_during_continuous_drag(controller, slider):
+    """Regrese N3: souvislé tažení průběžně mění vzhled už před uvolněním."""
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    w = MainWidget(controller)
+    d = SettingsDialog(controller, w)
+    d.show()
+    loop = QEventLoop()
+    drag = QTimer()
+    ticks = 0
+    during_drag = []
+
+    def move_slider():
+        nonlocal ticks
+        ticks += 1
+        getattr(d, slider).setValue(ticks)
+
+    drag.timeout.connect(move_slider)
+    key = "opacity" if slider == "opacity" else "glass_alpha"
+    controller.config_changed.connect(lambda cfg: during_drag.append((drag.isActive(), getattr(cfg.appearance, key))))
+    try:
+        drag.start(10)
+        QTimer.singleShot(250, loop.quit)
+        loop.exec()
+        assert ticks >= 10
+        assert any(active and value < 1.0 for active, value in during_drag)
+    finally:
+        drag.stop()
+        d.close()
+        assert getattr(controller.cfg.appearance, key) == pytest.approx(1 - ticks / 100)
+        w.close()

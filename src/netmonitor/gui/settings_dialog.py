@@ -331,7 +331,8 @@ class SettingsDialog(QDialog):
     def _queue_appearance(self, key: str, value: float) -> None:
         if not self._loading:
             self._pending_appearance[key] = value
-            self._appearance_timer.start()
+            if not self._appearance_timer.isActive():
+                self._appearance_timer.start()
 
     def _flush_appearance(self) -> None:
         if self._pending_appearance:
