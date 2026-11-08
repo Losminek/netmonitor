@@ -282,28 +282,33 @@ def scheduled_checks(monkeypatch):
 
 
 @pytest.mark.parametrize("visible", [False, True])
-@pytest.mark.parametrize("replies", [("ok:5", "timeout", "timeout"), ("timeout", "ok:5", "timeout")])
+@pytest.mark.parametrize("replies", [("ok:5", "timeout", "timeout"), ("timeout", "ok:5", "timeout"),
+                                    ("timeout", "timeout", "ok:5"), ("ok:5", "ok:5", "ok:5")])
 def test_wake_keeps_success_and_notifies_when_hidden(ctrl, scheduled_checks, visible, replies):
-    """Regrese R2: pozdější timeout nepřepíše úspěch; skryté okno doručí výsledek do tray signálu."""
+    """Regrese R2: skryté okno oznámí první úspěch jen jednou a pozdější timeout jej nepřepíše."""
     messages = []
     ctrl.notification.connect(messages.append)
     tools.wake(ctrl, ctrl.cfg.ping.targets[0])
     dialog = tools._wol_dialogs[-1]
     if not visible:
         dialog.close()
+    first_success = next(i for i, reply in enumerate(replies, 1) if reply.startswith("ok:"))
     for attempt, (callback, reply) in enumerate(zip(scheduled_checks, replies), 1):
         ctrl.pinger.default = reply
         callback()
         wait_until(lambda: dialog.pending == 3 - attempt)
+        assert len(messages) == int(not visible and attempt >= first_success)
     assert ctrl.pinger.calls == {HOST: 3}
     assert "dostupný (5.0 ms)" in dialog.status.text()
-    assert "Cíl odpověděl při dřívějším ověření." in dialog.status.text()
+    if replies[-1] == "timeout":
+        assert "Cíl odpověděl při dřívějším ověření." in dialog.status.text()
     assert "neodpovídá" not in dialog.status.text()
     if visible:
         assert not messages
     else:
-        assert len(messages) == 3
-        assert messages[-1].message == dialog.status.text()
+        assert len(messages) == 1
+        assert f"Ověření {first_success}/3" in messages[0].message
+        assert "dostupný (5.0 ms)" in messages[0].message
         assert messages[-1].kind == "wol" and messages[-1].key == "wol:pc"
         assert "Wake-on-LAN" in messages[-1].title
 
@@ -435,3 +440,63 @@ def test_wake_refreshes_widget_before_regular_interval(ctrl):
     finally:
         ctrl.engine.stop()
         widget.close()
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_wake_notifies_failure_only_after_all_checks(ctrl, scheduled_checks, visible):
+    """Regrese: při třech neúspěších se oznámení odešle až po posledním výsledku, jen ve skrytém okně."""
+    messages = []
+    ctrl.notification.connect(messages.append)
+    ctrl.pinger.default = "timeout"
+    tools.wake(ctrl, ctrl.cfg.ping.targets[0])
+    dialog = tools._wol_dialogs[-1]
+    if not visible:
+        dialog.close()
+    for attempt, callback in enumerate(scheduled_checks, 1):
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+        assert len(messages) == int(not visible and attempt == 3)
+    if not visible:
+        assert "Ověření 3/3" in messages[0].message
+        assert "neodpovídá (vypršel časový limit)" in messages[0].message
+
+
+def test_wake_does_not_repeat_visible_success_after_hiding(ctrl, scheduled_checks):
+    """Regrese: úspěch už zobrazený v okně se po jeho zavření znovu neoznamuje při dalších pokusech."""
+    messages = []
+    ctrl.notification.connect(messages.append)
+    tools.wake(ctrl, ctrl.cfg.ping.targets[0])
+    dialog = tools._wol_dialogs[-1]
+    scheduled_checks[0]()
+    wait_until(lambda: dialog.pending == 2)
+    assert "dostupný" in dialog.status.text() and not messages
+    dialog.close()
+    for attempt, callback in enumerate(scheduled_checks[1:], 2):
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+        assert not messages
+
+
+def test_wake_notification_limit_resets_for_reused_window(ctrl, scheduled_checks):
+    """Regrese: opakované probuzení ve stejném okně má vlastní limit jedné notifikace."""
+    messages = []
+    ctrl.notification.connect(messages.append)
+    target = ctrl.cfg.ping.targets[0]
+    tools.wake(ctrl, target)
+    dialog = tools._wol_dialogs[-1]
+    dialog.close()
+    for attempt, callback in enumerate(list(scheduled_checks), 1):
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+        assert len(messages) == 1
+    assert "dostupný" in messages[0].message
+    dialog.show()
+    ctrl.pinger.default = "timeout"
+    tools.wake(ctrl, target)
+    assert tools._wol_dialogs[-1] is dialog
+    dialog.close()
+    for attempt, callback in enumerate(scheduled_checks[3:], 1):
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+        assert len(messages) == 1 + int(attempt == 3)
+    assert "neodpovídá" in messages[1].message
