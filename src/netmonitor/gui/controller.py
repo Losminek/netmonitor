@@ -374,10 +374,15 @@ class Controller(QObject):
     # ------------------------------------------------------------------ autostart
     def autostart_command(self) -> list[str]:
         # AppImage mount i jeho sys.executable jsou dočasné; po přihlášení spouštíme původní soubor.
-        appimage = os.environ.get("APPIMAGE") if sys.platform == "linux" else None
-        if appimage and Path(appimage).is_file():
-            return [appimage, "--minimized"] if self.cfg.general.start_minimized else [appimage]
-        if getattr(sys, "frozen", False):
+        frozen = getattr(sys, "frozen", False)
+        if sys.platform == "linux" and frozen:
+            appimage = os.environ.get("APPIMAGE")
+            appdir = os.environ.get("APPDIR")
+            # Proměnné mohou být zděděné z cizí AppImage; ověříme příslušnost procesu.
+            if (appimage and appdir and os.path.isabs(appimage) and Path(appimage).is_file()
+                    and Path(sys.executable).resolve().is_relative_to(Path(appdir).resolve())):
+                return [appimage, "--minimized"] if self.cfg.general.start_minimized else [appimage]
+        if frozen:
             return [sys.executable, "--minimized"] if self.cfg.general.start_minimized else [sys.executable]
         exe = sys.executable
         if sys.platform == "win32" and exe.lower().endswith("python.exe"):
