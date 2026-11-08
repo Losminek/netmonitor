@@ -28,6 +28,7 @@ jobs:
     outputs:
       tag: ${{ steps.v.outputs.tag }}
       build: ${{ steps.v.outputs.build }}
+      missing: ${{ steps.v.outputs.missing }}
     steps:
       - uses: actions/checkout@v5
       - id: v
@@ -47,13 +48,28 @@ jobs:
             VER=$(python3 -c "import re;print(re.search(r'__version__ = \"([^\"]+)\"', open('src/netmonitor/__init__.py').read()).group(1))")
             TAG="v$VER"
             if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              echo "Release $TAG už existuje – nic nevydávám."
-              echo "tag=$TAG" >> "$GITHUB_OUTPUT"; echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
+              # release existuje – doplní se jen platformy, jejichž soubory v něm chybí (např. po selhání buildu)
+              NAMES=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+              MISSING=""
+              echo "$NAMES" | grep -q -- '-setup\.exe$' || MISSING="$MISSING windows-x64"
+              echo "$NAMES" | grep -q -- 'linux-x86_64\.tar\.gz$' || MISSING="$MISSING linux-x86_64"
+              echo "$NAMES" | grep -q -- 'macos-arm64\.dmg$' || MISSING="$MISSING macos-arm64"
+              echo "$NAMES" | grep -q -- 'macos-x86_64\.dmg$' || MISSING="$MISSING macos-x86_64"
+              echo "tag=$TAG" >> "$GITHUB_OUTPUT"; echo "missing=$MISSING" >> "$GITHUB_OUTPUT"
+              if [ -z "$MISSING" ]; then
+                echo "Release $TAG už existuje a je kompletní – nic nevydávám."
+                echo "build=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "Release $TAG existuje, doplňuji:$MISSING"
+                echo "build=true" >> "$GITHUB_OUTPUT"
+              fi
+              exit 0
             fi
             python3 scripts/changelog_section.py "$VER" > notes.md
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "NetMonitor $VER" --notes-file notes.md
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"; echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "missing=windows-x64 linux-x86_64 macos-arm64 macos-x86_64" >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare
@@ -73,36 +89,41 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      # tato platforma se staví jen tehdy, když její soubory v release chybí
+      DO_BUILD: ${{ contains(format(' {0} ', needs.prepare.outputs.missing), format(' {0} ', matrix.name)) }}
     steps:
       - uses: actions/checkout@v5
+        if: env.DO_BUILD == 'true'
       - uses: actions/setup-python@v6
+        if: env.DO_BUILD == 'true'
         with:
           python-version: "3.13"
 
       - name: Linux – systémové knihovny Qt
-        if: runner.os == 'Linux'
+        if: env.DO_BUILD == 'true' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-cursor0 libgl1 iputils-ping
 
       - name: Windows – Inno Setup
-        if: runner.os == 'Windows'
+        if: env.DO_BUILD == 'true' && runner.os == 'Windows'
         run: choco install innosetup -y --no-progress
 
       - name: Build (Windows)
-        if: runner.os == 'Windows'
+        if: env.DO_BUILD == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
 
       - name: Build (Linux)
-        if: runner.os == 'Linux'
+        if: env.DO_BUILD == 'true' && runner.os == 'Linux'
         env: { QT_QPA_PLATFORM: offscreen }
         run: ./scripts/build_linux.sh --deb
 
       - name: Build (macOS)
-        if: runner.os == 'macOS'
+        if: env.DO_BUILD == 'true' && runner.os == 'macOS'
         env: { QT_QPA_PLATFORM: offscreen }
         run: ./scripts/build_macos.sh --dmg
 
       - name: Nahrát do release
+        if: env.DO_BUILD == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
