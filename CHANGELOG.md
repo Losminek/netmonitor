@@ -1,6 +1,6 @@
 # Změny
 
-## Nevydáno
+## 1.3.4
 - Linux: když XWayland (Qt xcb) nejde načíst – typicky chybí libxcb-cursor0 –, aplikace na Waylandu místo pádu nastartuje nativně a v Nastavení i v logu řekne, co doinstalovat (#1)
 - Linux: položka v menu (.desktop) má jen jednu hlavní kategorii (Network), v některých prostředích se už nezobrazí dvakrát (#2)
 - Linux balíčky: build ověří, že bundle obsahuje knihovny Qt xcb (libxcb-cursor, libxkbcommon-x11); .deb navíc závisí na libgl1, doporučuje traceroute a nabízí network-manager; install.sh upozorní na chybějící knihovny a ikonu ukládá ve správné velikosti 512×512 (#3)

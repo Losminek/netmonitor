@@ -1,4 +1,4 @@
-# Stav projektu – verze 1.3.3 (8. 11. 2026)
+# Stav projektu – verze 1.3.4 (8. 11. 2026)
 
 Vývoj a ověřování proběhlo v **Linuxu (Ubuntu 24.04, Python 3.13, PySide6 6.12)** bez fyzické Wi-Fi a bez
 skutečného displeje (Qt offscreen).
