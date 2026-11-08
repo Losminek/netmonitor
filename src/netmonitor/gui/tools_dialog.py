@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QHeaderV
                                QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from ..core import speedtest, traceroute, wol
-from ..core.config import PingTarget
+from ..core.config import PingTarget, WolDevice
 from ..core.notifier import Notification
 from ..core.ping_engine import PingResult, ping_host
 from . import theme
@@ -281,7 +281,7 @@ _wol_dialogs: list[WolDialog] = []
 class WolDialog(QDialog):
     """Nemodální stav WoL; zavření okna nezruší naplánovaná ověření."""
 
-    def __init__(self, ctrl, target: PingTarget):
+    def __init__(self, ctrl, target: PingTarget | WolDevice):
         # Bez rodiče: ověření přežije i zavření nastavení, ze kterého uživatel budí.
         super().__init__()
         self.ctrl = ctrl
@@ -311,7 +311,7 @@ class WolDialog(QDialog):
     def start(self) -> None:
         self._best_result = None
         self.setWindowTitle(f"Wake-on-LAN – {self.target.name}")
-        if self.target.mac:
+        if self.target.mac or isinstance(self.target, WolDevice):
             self._send(self.target.mac)
             return
         self.detecting = True
@@ -355,14 +355,38 @@ class WolDialog(QDialog):
         a = self.ctrl.network.active if self.ctrl.network else None
         local_ip = a.ipv4[0] if a and a.ipv4 else None
         mask = a.ipv4_masks[0] if a and a.ipv4_masks else None
+        if isinstance(self.target, WolDevice):
+            device = self.target
+            self.detecting = True
+            self._status("Odesílám probouzecí paket…")
+
+            def job():
+                try:
+                    return (wol.send(mac, local_ip, mask, device.broadcast or None, port=device.port),)
+                except Exception as e:  # doručit i chybu, aby okno nezůstalo ve stavu busy
+                    return (e,)
+
+            self.ctrl._run_bg(f"wol-send-{id(self)}", job, lambda result: self._sent(mac, result[0]))
+            return
         try:
             sent = wol.send(mac, local_ip, mask, self.target.wol_broadcast or None)
         except (OSError, ValueError) as e:
-            self._status(f"Odeslání se nezdařilo: {e}")
+            self._sent(mac, e)
+            return
+        self._sent(mac, sent)
+
+    def _sent(self, mac: str, sent) -> None:
+        self.detecting = False
+        if isinstance(sent, Exception):
+            self._status(f"Odeslání se nezdařilo: {sent}")
             QMessageBox.warning(self, "Wake-on-LAN", self.status.text())
             return
         log.info("WoL %s (%s) -> %s", self.target.name, mac, ", ".join(sent))
-        self.ctrl._db(lambda: self.ctrl.history.add_event("wol", self.target.id, None, f"MAC {wol.format_mac(mac)}"))
+        target_id = self.target.id if isinstance(self.target, PingTarget) else None
+        self.ctrl._db(lambda: self.ctrl.history.add_event("wol", target_id, None, f"MAC {wol.format_mac(mac)}"))
+        if not self.target.host:
+            self._status(f"Probouzecí paket odeslán na {wol.format_mac(mac)}. Ověření není nastaveno.")
+            return
         self._status(f"Probouzecí paket odeslán na {wol.format_mac(mac)}. "
                      f"Dostupnost „{self.target.name}“ se ověří za 15, 30 a 60 s.")
         self.pending = len(WOL_CHECK_DELAYS_MS)
@@ -372,7 +396,7 @@ class WolDialog(QDialog):
     def _check(self, attempt: int) -> None:
         # Jednorázový ping nezávisí na enabled, pauze ani přítomnosti cíle v plánovači.
         self.ctrl._run_bg(f"wol-check-{id(self)}-{attempt}",
-                          lambda: ping_host(self.target.host, self.target.timeout_s,
+                          lambda: ping_host(self.target.host, self.target.timeout_s if isinstance(self.target, PingTarget) else 1.0,
                                             self.ctrl.pinger, self.ctrl.resolver),
                           lambda result: self._checked(attempt, result))
 
@@ -392,15 +416,15 @@ class WolDialog(QDialog):
         if not self.isVisible() and (first_success or (self.pending == 0 and not best.ok)):
             self.ctrl.notification.emit(Notification("wol", f"wol:{self.target.id}",
                                                      f"Wake-on-LAN – {self.target.name}", text))
-        current = self.ctrl.cfg.target_by_id(self.target.id)
+        current = self.ctrl.cfg.target_by_id(self.target.id) if isinstance(self.target, PingTarget) else None
         if current and current.enabled and current.host == self.target.host:
             self.ctrl.test_now(current.id)
 
 
-def wake(ctrl, target: PingTarget, parent=None) -> None:
+def wake(ctrl, target: PingTarget | WolDevice, parent=None) -> None:
     """Otevře stav probuzení; zjištění MAC a ověřovací pingy běží na pozadí."""
     for old in list(_wol_dialogs):
-        if old.ctrl is ctrl and old.target.id == target.id and (old.busy() or old.isVisible()):
+        if old.ctrl is ctrl and type(old.target) is type(target) and old.target.id == target.id and (old.busy() or old.isVisible()):
             old.show()
             old.raise_()
             if not old.busy():
