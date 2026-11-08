@@ -38,6 +38,7 @@ class IpConfigDialog(QDialog):
         self.setStyleSheet(theme.DIALOG_QSS)
         self.resize(560, 0)
         self._busy = False
+        self._applying = False
         self._loading = False
         self._load_generation = 0
         self._pending_preset: str | None = None
@@ -147,8 +148,11 @@ class IpConfigDialog(QDialog):
         # Karta se načítá na pozadí; předvolba se do formuláře vloží až po jejím načtení,
         # jinak by ji odpověď karty přepsala (viz _adapter_loaded).
         self._pending_preset = preset or None
-        self._fill_profiles()
-        self._fill_adapters(iface)
+        if self._applying:
+            self._reload_pending = True
+        else:
+            self._fill_profiles()
+            self._fill_adapters(iface)
         self.show()
         self.raise_()
         self.activateWindow()
@@ -178,6 +182,9 @@ class IpConfigDialog(QDialog):
         self._load_adapter()
 
     def _load_adapter(self) -> None:
+        if self._applying:
+            self._reload_pending = True
+            return
         name = self.adapter.currentData()
         self._load_generation += 1
         generation = self._load_generation
@@ -266,6 +273,8 @@ class IpConfigDialog(QDialog):
             errs.append("Aktuální nastavení dosud není načtené")
         elif self._loaded.unknown:
             errs.append("Nezjištěno: " + ", ".join(self._loaded.unknown) + ". Nastavení nelze bezpečně použít.")
+        if self._loaded is not None:
+            errs.extend(self._loaded.apply_blockers)
         html = "".join(f"<div style='color:#ff6b78'>✖ {escape(e)}</div>" for e in errs)
         html += "".join(f"<div style='color:#ffaa2b'>⚠ {escape(w)}</div>" for w in warns)
         if not self._busy:
@@ -327,9 +336,9 @@ class IpConfigDialog(QDialog):
 
     # ------------------------------------------------------------------ použití
     def _set_busy(self, busy: bool, text: str = "") -> None:
-        self._busy = busy
-        self.adapter.setEnabled(not busy or self._loading)
-        self.btn_apply.setText("Pracuji…" if busy else "Použít")
+        self._busy = busy or self._applying
+        self.adapter.setEnabled(not self._busy or (self._loading and not self._applying))
+        self.btn_apply.setText("Pracuji…" if self._busy else "Použít")
         self._update_enabled()
         if text:
             self.msg.setText(f"<div style='color:#38d9ff'>{text}</div>")
@@ -351,8 +360,11 @@ class IpConfigDialog(QDialog):
             self._confirm(s, warns, False)
 
     def _confirm(self, s: IpSettings, warns: list[str], occupied: bool) -> None:
+        if self._applying:
+            return
         self._set_busy(False)
-        if self._loaded is None or self._loaded.unknown or s.iface != self.adapter.currentData():
+        if self._loaded is None or self._loaded.unknown or self._loaded.apply_blockers \
+                or s.iface != self.adapter.currentData():
             return
         text = (f"Karta: {s.iface}\n\nAktuální stav:\n{self._loaded.summary()}"
                 f"\n\nNavržený stav:\n{s.summary()}")
@@ -378,11 +390,13 @@ class IpConfigDialog(QDialog):
         if box.exec() != QMessageBox.StandardButton.Yes:
             self._live_validate()
             return
+        self._applying = True
         self._set_busy(True, "Nastavuji síťovou kartu… (potvrďte dotaz správce)")
         self.ctrl.apply_ip(s, self._done)
 
     def _done(self, res) -> None:
         ok, out = res if isinstance(res, tuple) else (False, str(res))
+        self._applying = False
         self._loaded = None if ok else self._loaded
         self._set_busy(False)
         if ok:
