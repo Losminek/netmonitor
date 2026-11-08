@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import replace
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QHeaderV
 
 from ..core import speedtest, traceroute, wol
 from ..core.config import PingTarget
-from ..core.ping_engine import Resolver, ping_host
+from ..core.ping_engine import PingResult, ping_host
 from . import theme
 from .ping_panel import fmt_rtt
 
@@ -272,43 +273,113 @@ def open_traceroute(ctrl, target: PingTarget) -> TracerouteDialog:
     return d
 
 
-def wake(ctrl, target: PingTarget, parent=None) -> None:
-    """Probudí zařízení. Bez MAC zkusí najít adresu v ARP tabulce a nabídne její uložení."""
-    mac = target.mac
-    if not mac:
-        ip, _ = Resolver().resolve(target.host)
-        found = None
-        if ip:
-            ping_host(ip, 0.6, ctrl.pinger, Resolver())     # osvěží ARP záznam, pokud zařízení běží
-            found = wol.arp_lookup(ip)
-        if not found:
-            QMessageBox.information(parent, "Wake-on-LAN",
-                                    f"Cíl „{target.name}“ nemá zadanou MAC adresu a v ARP tabulce ji nelze najít "
-                                    "(zařízení je vypnuté nebo v jiné síti).\n\nZadejte ji v Nastavení → Ping cíle → "
-                                    "Upravit. Tip: když zařízení běží, tlačítko „Zjistit“ ji doplní samo.")
+WOL_CHECK_DELAYS_MS = (15_000, 30_000, 60_000)
+_wol_dialogs: list[WolDialog] = []
+
+
+class WolDialog(QDialog):
+    """Nemodální stav WoL; zavření okna nezruší naplánovaná ověření."""
+
+    def __init__(self, ctrl, target: PingTarget):
+        # Bez rodiče: ověření přežije i zavření nastavení, ze kterého uživatel budí.
+        super().__init__()
+        self.ctrl = ctrl
+        self.target = replace(target)
+        self.pending = 0
+        self.detecting = False
+        self.setWindowTitle(f"Wake-on-LAN – {target.name}")
+        self.setStyleSheet(theme.DIALOG_QSS)
+        self.resize(480, 0)
+        layout = QVBoxLayout(self)
+        self.status = QLabel()
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        close = QPushButton("Zavřít")
+        close.clicked.connect(self.close)
+        layout.addWidget(close)
+
+    def busy(self) -> bool:
+        return self.detecting or self.pending > 0
+
+    def _status(self, text: str) -> None:
+        log.info("WoL %s: %s", self.target.name, text)
+        self.status.setText(text)
+
+    def start(self) -> None:
+        if self.target.mac:
+            self._send(self.target.mac)
             return
-        if QMessageBox.question(parent, "Wake-on-LAN",
-                                f"Nalezena MAC adresa {found} pro {target.host}.\nUložit ji k cíli a odeslat "
+        self.detecting = True
+        self._status("Zjišťuji MAC adresu…")
+        self.ctrl.detect_mac(f"mac-wol-{id(self)}", self.target.host, self._mac_found)
+
+    def _mac_found(self, res) -> None:
+        self.detecting = False
+        mac, err = res
+        if not mac:
+            self._status(err)
+            QMessageBox.warning(self, "Wake-on-LAN", err + "\nZadejte MAC v Nastavení → Ping cíle → Upravit.")
+            return
+        # Uživatel mohl během úlohy cíl přepsat nebo smazat.
+        current = self.ctrl.cfg.target_by_id(self.target.id)
+        if not current or current.host != self.target.host:
+            self._status("Cíl se během zjišťování změnil; spusťte probuzení znovu.")
+            return
+        if QMessageBox.question(self, "Wake-on-LAN",
+                                f"Nalezena MAC adresa {mac} pro {self.target.host}.\nUložit ji k cíli a odeslat "
                                 "probouzecí paket?") != QMessageBox.StandardButton.Yes:
+            self._status("Probuzení zrušeno.")
             return
-        cfg = ctrl.cfg.copy()
-        t = cfg.target_by_id(target.id)
+        cfg = self.ctrl.cfg.copy()
+        t = cfg.target_by_id(self.target.id)
         if t:
-            t.mac = found
-            ctrl.update_config(cfg)
-        mac = found
-    a = ctrl.network.active if ctrl.network else None
-    local_ip = a.ipv4[0] if a and a.ipv4 else None
-    mask = a.ipv4_masks[0] if a and a.ipv4_masks else None
-    try:
-        sent = wol.send(mac, local_ip, mask, target.wol_broadcast or None)
-    except (OSError, ValueError) as e:
-        QMessageBox.warning(parent, "Wake-on-LAN", f"Odeslání se nezdařilo:\n{e}")
-        return
-    log.info("WoL %s (%s) -> %s", target.name, mac, ", ".join(sent))
-    ctrl._db(lambda: ctrl.history.add_event("wol", target.id, None, f"MAC {wol.format_mac(mac)}"))
-    for delay in (15_000, 30_000, 60_000):              # ověř, jestli se zařízení probudilo
-        QTimer.singleShot(delay, lambda: ctrl.test_now(target.id))
-    QMessageBox.information(parent, "Wake-on-LAN",
-                            f"Probouzecí paket odeslán na {wol.format_mac(mac)}.\n"
-                            f"Stav „{target.name}“ ve widgetu se ověří za 15, 30 a 60 s.")
+            t.mac = mac
+            self.ctrl.update_config(cfg)
+        self._send(mac)
+
+    def _send(self, mac: str) -> None:
+        a = self.ctrl.network.active if self.ctrl.network else None
+        local_ip = a.ipv4[0] if a and a.ipv4 else None
+        mask = a.ipv4_masks[0] if a and a.ipv4_masks else None
+        try:
+            sent = wol.send(mac, local_ip, mask, self.target.wol_broadcast or None)
+        except (OSError, ValueError) as e:
+            self._status(f"Odeslání se nezdařilo: {e}")
+            QMessageBox.warning(self, "Wake-on-LAN", self.status.text())
+            return
+        log.info("WoL %s (%s) -> %s", self.target.name, mac, ", ".join(sent))
+        self.ctrl._db(lambda: self.ctrl.history.add_event("wol", self.target.id, None, f"MAC {wol.format_mac(mac)}"))
+        self._status(f"Probouzecí paket odeslán na {wol.format_mac(mac)}. "
+                     f"Dostupnost „{self.target.name}“ se ověří za 15, 30 a 60 s.")
+        self.pending = len(WOL_CHECK_DELAYS_MS)
+        for attempt, delay in enumerate(WOL_CHECK_DELAYS_MS, 1):
+            QTimer.singleShot(delay, lambda n=attempt: self._check(n))
+
+    def _check(self, attempt: int) -> None:
+        # Jednorázový ping nezávisí na enabled, pauze ani přítomnosti cíle v plánovači.
+        self.ctrl._run_bg(f"wol-check-{id(self)}-{attempt}",
+                          lambda: ping_host(self.target.host, self.target.timeout_s,
+                                            self.ctrl.pinger, self.ctrl.resolver),
+                          lambda result: self._checked(attempt, result))
+
+    def _checked(self, attempt: int, result: PingResult) -> None:
+        self.pending -= 1
+        detail = f"dostupný ({fmt_rtt(result.rtt_ms)})" if result.ok else f"neodpovídá ({result.error or result.status.value})"
+        self._status(f"Ověření {attempt}/3: {self.target.name} – {detail}.")
+
+
+def wake(ctrl, target: PingTarget, parent=None) -> None:
+    """Otevře stav probuzení; zjištění MAC a ověřovací pingy běží na pozadí."""
+    for old in list(_wol_dialogs):
+        if old.ctrl is ctrl and old.target.id == target.id and old.busy():
+            old.show()
+            old.raise_()
+            return
+        if not old.isVisible() and not old.busy():
+            _wol_dialogs.remove(old)
+            old.deleteLater()
+    d = WolDialog(ctrl, target)
+    _wol_dialogs.append(d)                     # držet Qt objekt až do doručení posledního výsledku
+    d.show()
+    d.start()
