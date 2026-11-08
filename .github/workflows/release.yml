@@ -124,13 +124,13 @@ jobs:
 
       - name: Nahrát do release
         if: env.DO_BUILD == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          fail_on_unmatched_files: false
-          files: |
-            dist/*.zip
-            dist/*-setup.exe
-            dist/*.tar.gz
-            dist/*.deb
-            dist/*.dmg
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.zip dist/*-setup.exe dist/*.tar.gz dist/*.deb dist/*.dmg)
+          [ ${#files[@]} -gt 0 ] || { echo "Žádné soubory k nahrání"; exit 1; }
+          printf 'Nahrávám: %s\n' "${files[@]}"
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber -R "$GITHUB_REPOSITORY"
