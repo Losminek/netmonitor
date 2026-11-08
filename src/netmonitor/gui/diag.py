@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import re
 from collections.abc import Iterable, Mapping
@@ -18,6 +19,11 @@ class _Screen(Protocol):
     def logicalDotsPerInch(self) -> float: ...
     def physicalDotsPerInch(self) -> float: ...
     def refreshRate(self) -> float: ...
+
+
+def _finite(value: float) -> float | None:
+    """Qt může při nedostupném monitoru vrátit NaN; JSON pak musí obsahovat null."""
+    return value if math.isfinite(value) else None
 
 
 def _safe_environment(environ: Mapping[str, str]) -> dict:
@@ -64,10 +70,10 @@ def build_gui_diagnostics(*, qt_platform: str, qt_version: str, pyside_version: 
         rect = screen.geometry()
         screen_info.append({
             "geometry": {"x": rect.x(), "y": rect.y(), "width": rect.width(), "height": rect.height()},
-            "devicePixelRatio": screen.devicePixelRatio(),
-            "logicalDotsPerInch": screen.logicalDotsPerInch(),
-            "physicalDotsPerInch": screen.physicalDotsPerInch(),
-            "refreshRate": screen.refreshRate(),
+            "devicePixelRatio": _finite(screen.devicePixelRatio()),
+            "logicalDotsPerInch": _finite(screen.logicalDotsPerInch()),
+            "physicalDotsPerInch": _finite(screen.physicalDotsPerInch()),
+            "refreshRate": _finite(screen.refreshRate()),
         })
     return {"qt_platform": qt_platform, "qt_version": qt_version, "pyside_version": pyside_version,
             "environment": _safe_environment(environ), "screens": screen_info,
