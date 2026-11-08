@@ -1,4 +1,116 @@
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+
+from netmonitor.core.config import AppConfig
+from netmonitor.gui.controller import Controller
 from netmonitor.platform import linux, macos, windows
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+@pytest.mark.parametrize("minimized", [False, True])
+def test_autostart_appimage_path(tmp_path, monkeypatch, frozen, minimized):
+    """Regrese L23: autostart AppImage nesmí odkazovat na dočasný mount ani použít shellové uvozovky."""
+    appimage = "/opt/apps/Net Monitor.AppImage"
+    monkeypatch.setenv("APPIMAGE", appimage)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(sys, "executable", "/tmp/.mount_NetMonitor/usr/bin/NetMonitor")
+    checked = []
+
+    def is_file(path):
+        checked.append(str(path))
+        return str(path) == appimage
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    cfg = AppConfig()
+    cfg.general.start_minimized = minimized
+    command = Controller.autostart_command(Mock(cfg=cfg))
+    assert command == [appimage] + (["--minimized"] if minimized else [])
+    assert checked == [appimage]
+    linux.set_autostart(True, command)
+    content = (tmp_path / "autostart" / "netmonitor.desktop").read_text(encoding="utf-8")
+    expected = 'Exec="/opt/apps/Net Monitor.AppImage"' + (" --minimized" if minimized else "")
+    assert expected in content.splitlines()
+
+
+@pytest.mark.parametrize("appimage", [None, "", "missing", "directory"])
+@pytest.mark.parametrize("frozen", [False, True])
+def test_autostart_appimage_fallback(tmp_path, monkeypatch, appimage, frozen):
+    """Regrese L23: chybějící AppImage ani adresář nesmí přepsat původní příkaz."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(sys, "executable", "/opt/netmonitor/python")
+    if appimage is None:
+        monkeypatch.delenv("APPIMAGE", raising=False)
+    else:
+        monkeypatch.setenv("APPIMAGE", str(tmp_path / appimage) if appimage else "")
+    (tmp_path / "directory").mkdir()
+    cfg = AppConfig()
+    cfg.general.start_minimized = True
+    assert Controller.autostart_command(Mock(cfg=cfg)) == ["/opt/netmonitor/python"] + (
+        ["--minimized"] if frozen else ["-m", "netmonitor"])
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+@pytest.mark.parametrize("frozen", [False, True])
+def test_autostart_appimage_ignored_on_other_platforms(tmp_path, monkeypatch, platform, frozen):
+    """Regrese L23: APPIMAGE nesmí ovlivnit autostart Windows/macOS."""
+    appimage = tmp_path / "NetMonitor.AppImage"
+    appimage.touch()
+    monkeypatch.setenv("APPIMAGE", str(appimage))
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(sys, "executable", "/opt/python.exe")
+    cfg = AppConfig()
+    cfg.general.start_minimized = False
+    expected = ["/opt/python.exe"] if frozen else [
+        "/opt/pythonw.exe" if platform == "win32" else "/opt/python.exe", "-m", "netmonitor"]
+    assert Controller.autostart_command(Mock(cfg=cfg)) == expected
+
+
+@pytest.mark.parametrize(("argument", "expected"), [
+    ("--minimized", "--minimized"),
+    ("", '""'),
+    ("/opt/apps/Net Monitor.AppImage", '"/opt/apps/Net Monitor.AppImage"'),
+    ("a$b", r'"a\\$b"'),
+    ('a"b', r'"a\\"b"'),
+    ("a`b", r'"a\\`b"'),
+    (r"a\b", r'"a\\\\b"'),
+    ("100%", "100%%"),
+    ("%f %U", '"%%f %%U"'),
+    ("a\tb", r'"a\tb"'),
+    ("a\nb", r'"a\nb"'),
+    ("a\rb", r'"a\rb"'),
+])
+def test_desktop_exec_quote(argument, expected):
+    """Regrese L23: Exec má vlastní quoting i escapování hodnoty, nikoli syntaxi shellu."""
+    assert linux._quote_exec_arg(argument) == expected
+
+
+@pytest.mark.parametrize("reserved", "'><~|&;*?#()")
+def test_desktop_exec_quote_reserved(reserved):
+    """Regrese L23: všechny další rezervované znaky vyžadují dvojité uvozovky."""
+    assert linux._quote_exec_arg(f"a{reserved}b") == f'"a{reserved}b"'
+
+
+def test_autostart_desktop_validation(tmp_path, monkeypatch):
+    """Regrese L23: vygenerovaný autostart je platný Desktop Entry i se speciálními znaky."""
+    validator = shutil.which("desktop-file-validate")
+    if not validator:
+        pytest.skip("desktop-file-validate není dostupný")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    linux.set_autostart(True, ["/opt/apps/Net Monitor.AppImage", "--minimized",
+                               'mezera $ " ` \\ %f', "", "tab\tnewline\nreturn\r"])
+    desktop = tmp_path / "autostart" / "netmonitor.desktop"
+    result = subprocess.run([validator, str(desktop)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not result.stdout and not result.stderr
 
 
 def test_proc_net_route(tmp_path):
