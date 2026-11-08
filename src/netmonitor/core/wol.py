@@ -57,7 +57,10 @@ def directed_broadcast(ip: str, mask: str) -> str | None:
 def validate_destination(mac: str, broadcast: str | None, port: int | None) -> None:
     parse_mac(mac)
     if broadcast:
-        ipaddress.IPv4Address(broadcast)
+        try:
+            ipaddress.IPv4Address(broadcast)
+        except ValueError:
+            raise ValueError("Neplatná broadcast adresa pro WoL; zadejte IPv4 adresu") from None
     if port is not None and (type(port) is not int or not 1 <= port <= 65535):
         raise ValueError("Port musí být celé číslo 1–65535")
 
@@ -74,7 +77,6 @@ def send(mac_text: str, local_ip: str | None = None, netmask: str | None = None,
         if b and b not in targets:
             targets.append(b)
     if extra_broadcast:
-        ipaddress.IPv4Address(extra_broadcast)        # validace
         if extra_broadcast not in targets:
             targets.append(extra_broadcast)
     sent = []

@@ -235,6 +235,7 @@ class WolConfig:
 
 
 def wol_devices_from_list(items: Any) -> list[WolDevice]:
+    from .wol import parse_mac
     out = []
     seen = set()
     names = {f.name for f in fields(WolDevice)}
@@ -242,9 +243,17 @@ def wol_devices_from_list(items: Any) -> list[WolDevice]:
         if not isinstance(item, dict):
             continue
         device = WolDevice(**{k: v for k, v in item.items() if k in names}).normalized()
-        if device.validate():
+        try:
+            parse_mac(device.mac)
+        except ValueError:
             log.warning("Přeskakuji neplatné zařízení WoL")
             continue
+        device.name = device.name or device.mac
+        device.port = int(_clamp(device.port, 1, 65535, 9))
+        if host_kind(device.broadcast) != "ipv4":
+            device.broadcast = ""
+        if host_kind(device.host) == "invalid":
+            device.host = ""
         if device.id in seen:
             device.id = new_id()
         seen.add(device.id)

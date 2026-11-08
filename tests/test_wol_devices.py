@@ -93,7 +93,11 @@ def test_wol_config_roundtrip_defaults_and_duplicate_ids(tmp_path):
 def test_invalid_device_is_rejected(field, value):
     raw = {"name": "PC", "mac": MAC, field: value}
     assert WolDevice(**raw).validate()
-    assert not AppConfig.from_dict({"wol": {"devices": [raw]}}).wol.devices
+    devices = AppConfig.from_dict({"wol": {"devices": [raw]}}).wol.devices
+    if field == "mac":
+        assert not devices
+    else:
+        assert len(devices) == 1 and not devices[0].validate()
 
 
 @pytest.mark.parametrize("port", [1, 9, 65535])
@@ -140,12 +144,14 @@ def test_linux_neighbors_fallback(monkeypatch):
 def test_dialog_crud_and_validation(ctrl, monkeypatch):
     dialog = gui.WolDevicesDialog(ctrl)
     dialog.show()
-    assert dialog.broadcast.text() == "192.0.2.255" and dialog.port.value() == 9
+    assert not dialog.broadcast.text() and dialog.port.value() == 9
+    assert dialog.broadcast.placeholderText() == "192.0.2.255"
     assert dialog.save() is None and dialog.error.text()
     dialog.name.setText("PC")
     dialog.mac.setText(MAC)
     device = dialog.save()
     assert device and dialog.table.topLevelItemCount() == 1
+    assert device.broadcast == ctrl.cfg.wol.devices[0].broadcast == ""
     assert not ctrl.cfg.real_targets()
     dialog.new()
     item = dialog.table.topLevelItem(0)
@@ -209,7 +215,7 @@ def test_network_selection_prefills_editor(ctrl, monkeypatch):
     dialog = gui.WolDevicesDialog(ctrl)
     dialog._neighbors()
     assert dialog.mac.text() == MAC and dialog.host.text() == HOST
-    assert dialog.broadcast.text() == "192.0.2.255"
+    assert not dialog.broadcast.text() and dialog.broadcast.placeholderText() == "192.0.2.255"
     dialog.close()
 
 
@@ -304,3 +310,135 @@ def test_explicit_udp_port_and_invalid_destination(monkeypatch):
         with pytest.raises(ValueError):
             SEND(MAC, **kwargs)
     factory.assert_not_called()
+
+
+@pytest.mark.parametrize("port,expected", [("9", 9), (9.0, 9), (None, 9), ("bad", 9),
+    (float("nan"), 9), (0, 1), (65536, 65535), (9.5, 9)])
+def test_config_sanitizes_device_without_losing_it(tmp_path, port, expected):
+    """Regrese review: vadný port/host/broadcast nezahodí zařízení s platnou MAC."""
+    raw = {"id": "pc", "name": "", "mac": MAC, "port": port,
+           "broadcast": "invalid", "host": "192.0.2.999"}
+    cfg = AppConfig.from_dict({"wol": {"devices": [raw]}})
+    assert len(cfg.wol.devices) == 1
+    device = cfg.wol.devices[0]
+    assert device.id == "pc" and device.mac == MAC and device.name
+    assert device.port == expected
+    assert device.broadcast == device.host == ""
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    assert load_config(path).to_dict() == cfg.to_dict()
+
+
+def test_deleted_device_clears_editor(ctrl):
+    """Regrese review: změna konfigurace nesmí nechat editor obnovit smazané ID."""
+    ctrl.cfg.wol.devices = [WolDevice(id="pc", name="PC", mac=MAC)]
+    dialog = gui.WolDevicesDialog(ctrl)
+    item = dialog.table.topLevelItem(0)
+    assert item is not None
+    dialog.table.setCurrentItem(item)
+    assert dialog.edit_id == "pc"
+    dialog.name.setText("Rozpracované")
+    cfg = ctrl.cfg.copy()
+    cfg.wol.devices.clear()
+    ctrl.update_config(cfg)
+    assert dialog.edit_id is None
+    assert not dialog.name.text() and not dialog.mac.text()
+    assert dialog.save() is None and ctrl.cfg.wol.devices == []
+    dialog.close()
+
+
+def test_invalid_broadcast_message_is_czech():
+    """Regrese review: editor vrací českou validaci, ne text z ipaddress."""
+    with pytest.raises(ValueError, match="Neplatná broadcast adresa pro WoL"):
+        wol.validate_destination(MAC, "example.com", 9)
+    errors = WolDevice(name="PC", mac=MAC, broadcast="192.0.2.999").validate()
+    assert errors and errors[0].startswith("Neplatná broadcast adresa pro WoL")
+
+
+def test_send_saves_edits_and_records_device_name(ctrl, no_packets):
+    """Regrese review: Probudit uloží rozepsaná data a historie identifikuje zařízení."""
+    dialog = gui.WolDevicesDialog(ctrl)
+    dialog.name.setText("Testovací PC")
+    dialog.mac.setText(MAC)
+    dialog.port.setValue(40009)
+    dialog.send()
+    pump_until(lambda: bool(no_packets.called) and not ctrl._busy)
+    assert len(ctrl.cfg.wol.devices) == 1
+    assert ctrl.cfg.wol.devices[0].name == "Testovací PC"
+    no_packets.assert_called_once_with(MAC, "192.0.2.1", "255.255.255.0", None, port=40009)
+    events = ctrl.history.events()
+    assert len(events) == 1 and events[0].target_id is None
+    assert events[0].detail == f"Testovací PC – MAC {MAC}"
+    dialog.close()
+
+
+def _quick_menu(menu):
+    quick = next(a.menu() for a in menu.actions() if a.text() == "Uložená zařízení WoL")
+    assert isinstance(quick, QMenu)
+    return quick
+
+
+def test_tray_wol_submenu_live_updates(ctrl, no_packets):
+    """Regrese review: funguje i s PR #4, které tray menu po změně cfg nepřestavuje."""
+    from netmonitor.gui.tray import Tray
+
+    widget = MainWidget(ctrl)
+    tray = Tray(widget)
+    # Také samostatné již otevřené menu musí dostat změny bez build_menu.
+    persistent_menu = widget.build_menu()
+    quick = _quick_menu(persistent_menu)
+
+    def assert_entries(expected):
+        current = tray.contextMenu()
+        assert isinstance(current, QMenu)
+        for submenu in (quick, _quick_menu(current)):
+            assert submenu.isEnabled()
+            assert [a.text() for a in submenu.actions()] == expected
+
+    assert_entries(["(žádná zařízení)"])
+    assert not quick.actions()[0].isEnabled()
+    cfg = ctrl.cfg.copy()
+    cfg.wol.devices = [WolDevice(id="pc", name="PC", mac=MAC)]
+    ctrl.update_config(cfg)
+    assert_entries(["PC"])
+    assert quick.actions()[0].data() == ("wol_device", "pc")
+    original_action = quick.actions()[0]
+    cfg = ctrl.cfg.copy()
+    cfg.wol.devices[0].mac = "02:00:00:00:00:02"
+    ctrl.update_config(cfg)
+    assert quick.actions()[0] is original_action
+    cfg = ctrl.cfg.copy()
+    cfg.wol.devices[0].name = "Server"
+    ctrl.update_config(cfg)
+    assert_entries(["Server"])
+    current = tray.contextMenu()
+    assert isinstance(current, QMenu)
+    _quick_menu(current).actions()[0].trigger()
+    pump_until(lambda: no_packets.called)
+    assert no_packets.call_args.args[0] == "02:00:00:00:00:02"
+    cfg = ctrl.cfg.copy()
+    cfg.wol.devices.clear()
+    ctrl.update_config(cfg)
+    assert_entries(["(žádná zařízení)"])
+    assert not quick.actions()[0].isEnabled()
+    tray.hide()
+    tray.deleteLater()
+    widget.close()
+
+
+def test_wol_menu_translations(ctrl):
+    """Regrese review: nové položky menu procházejí přes tr()."""
+    from netmonitor.gui.i18n import language, set_language
+
+    previous = language()
+    set_language("en")
+    try:
+        menu = QMenu()
+        gui.add_wol_menu(menu, ctrl, lambda: None)
+        assert menu.actions()[0].text() == "Wake device…"
+        submenu = menu.actions()[1].menu()
+        assert isinstance(submenu, QMenu)
+        assert submenu.title() == "Saved WoL devices"
+        assert submenu.actions()[0].text() == "(no devices)"
+    finally:
+        set_language(previous)
