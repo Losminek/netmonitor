@@ -8,13 +8,14 @@ import time
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
-                               QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
+                               QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..core import speedtest, traceroute, wol
 from ..core.config import PingTarget
 from ..core.ping_engine import Resolver, ping_host
 from . import theme
 from .ping_panel import fmt_rtt
+from .widgets import show_dialog
 
 log = logging.getLogger(__name__)
 
@@ -267,9 +268,18 @@ def open_traceroute(ctrl, target: PingTarget) -> TracerouteDialog:
         old.deleteLater()                      # rušení v GUI vlákně a až po doběhnutí vlákna
     d = TracerouteDialog(ctrl, target)
     _trace_dialogs.append(d)
-    d.show()
+    show_dialog(d)
     d.start()
     return d
+
+
+def _wol_message(parent: QWidget | None, icon: QMessageBox.Icon, text: str,
+                 buttons: QMessageBox.StandardButton = QMessageBox.StandardButton.Ok) -> int:
+    """Aktivuje i modální hlášení WoL a zachová synchronní odpověď uživatele."""
+    dialog = QMessageBox(icon, "Wake-on-LAN", text, buttons, parent)
+    dialog.setModal(True)
+    show_dialog(dialog)
+    return dialog.exec()
 
 
 def wake(ctrl, target: PingTarget, parent=None) -> None:
@@ -282,14 +292,16 @@ def wake(ctrl, target: PingTarget, parent=None) -> None:
             ping_host(ip, 0.6, ctrl.pinger, Resolver())     # osvěží ARP záznam, pokud zařízení běží
             found = wol.arp_lookup(ip)
         if not found:
-            QMessageBox.information(parent, "Wake-on-LAN",
-                                    f"Cíl „{target.name}“ nemá zadanou MAC adresu a v ARP tabulce ji nelze najít "
-                                    "(zařízení je vypnuté nebo v jiné síti).\n\nZadejte ji v Nastavení → Ping cíle → "
-                                    "Upravit. Tip: když zařízení běží, tlačítko „Zjistit“ ji doplní samo.")
+            _wol_message(parent, QMessageBox.Icon.Information,
+                         f"Cíl „{target.name}“ nemá zadanou MAC adresu a v ARP tabulce ji nelze najít "
+                         "(zařízení je vypnuté nebo v jiné síti).\n\nZadejte ji v Nastavení → Ping cíle → "
+                         "Upravit. Tip: když zařízení běží, tlačítko „Zjistit“ ji doplní samo.")
             return
-        if QMessageBox.question(parent, "Wake-on-LAN",
-                                f"Nalezena MAC adresa {found} pro {target.host}.\nUložit ji k cíli a odeslat "
-                                "probouzecí paket?") != QMessageBox.StandardButton.Yes:
+        answer = _wol_message(parent, QMessageBox.Icon.Question,
+                              f"Nalezena MAC adresa {found} pro {target.host}.\nUložit ji k cíli a odeslat "
+                              "probouzecí paket?",
+                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
             return
         cfg = ctrl.cfg.copy()
         t = cfg.target_by_id(target.id)
@@ -303,12 +315,12 @@ def wake(ctrl, target: PingTarget, parent=None) -> None:
     try:
         sent = wol.send(mac, local_ip, mask, target.wol_broadcast or None)
     except (OSError, ValueError) as e:
-        QMessageBox.warning(parent, "Wake-on-LAN", f"Odeslání se nezdařilo:\n{e}")
+        _wol_message(parent, QMessageBox.Icon.Warning, f"Odeslání se nezdařilo:\n{e}")
         return
     log.info("WoL %s (%s) -> %s", target.name, mac, ", ".join(sent))
     ctrl._db(lambda: ctrl.history.add_event("wol", target.id, None, f"MAC {wol.format_mac(mac)}"))
     for delay in (15_000, 30_000, 60_000):              # ověř, jestli se zařízení probudilo
         QTimer.singleShot(delay, lambda: ctrl.test_now(target.id))
-    QMessageBox.information(parent, "Wake-on-LAN",
-                            f"Probouzecí paket odeslán na {wol.format_mac(mac)}.\n"
-                            f"Stav „{target.name}“ ve widgetu se ověří za 15, 30 a 60 s.")
+    _wol_message(parent, QMessageBox.Icon.Information,
+                 f"Probouzecí paket odeslán na {wol.format_mac(mac)}.\n"
+                 f"Stav „{target.name}“ ve widgetu se ověří za 15, 30 a 60 s.")
