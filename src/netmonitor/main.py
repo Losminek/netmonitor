@@ -48,7 +48,7 @@ def select_qt_platform(env: Mapping[str, str], prefer_xwayland: bool, platform: 
     if xcb_ok():
         return selected, None
     warning = ("Nelze načíst knihovnu libxcb-cursor0 (libxcb-cursor.so.0) potřebnou pro XWayland / X11 (xcb). "
-               "Na Debianu/Ubuntu ji nainstalujte: sudo apt install libxcb-cursor0. ")
+               "Po instalaci (Debian/Ubuntu: sudo apt install libxcb-cursor0) aplikaci restartujte. ")
     warning += ("Qt zkusí použít Wayland s omezenou pozicí a vrstvou okna." if wayland else
                 "Bez této knihovny nelze na X11 spustit Qt.")
     return selected, warning
@@ -115,8 +115,6 @@ def main(argv=None) -> int:
         log.info("Wayland detekován – preferuji XWayland (xcb) s fallbackem na Wayland")
     if warning:
         log.warning(warning)
-        if sys.stderr is not None:
-            print(warning, file=sys.stderr, flush=True)
 
     from PySide6.QtCore import QLockFile, Qt, QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
@@ -129,9 +127,8 @@ def main(argv=None) -> int:
     QApplication.setApplicationVersion(__version__)
     app = QApplication(sys.argv[:1])
     if selected == "xcb;wayland" and app.platformName() == "wayland":
-        app.setProperty("xcb_fallback", True)
-        log.warning("XWayland (xcb) se nepodařilo načíst – používám Wayland s omezenou pozicí a vrstvou okna. "
-                    "Zkontrolujte knihovny xcb; na Debianu/Ubuntu: sudo apt install libxcb-cursor0")
+        app.setProperty("xcb_fallback", "cursor" if warning is not None else "other")
+        log.warning("XWayland (xcb) se nepodařilo načíst – používám Wayland s omezenou pozicí a vrstvou okna.")
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(app_icon("ok"))
     set_language(cfg.general.language)

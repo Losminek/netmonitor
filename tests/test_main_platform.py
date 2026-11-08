@@ -12,14 +12,14 @@ def test_wayland_with_xwayland(xcb_ok: bool):
     if xcb_ok:
         assert warning is None
     else:
-        assert warning and "sudo apt install libxcb-cursor0" in warning
+        assert warning and "Debian/Ubuntu: sudo apt install libxcb-cursor0)" in warning
     assert env == {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"}
 
 
 def test_x11_without_xcb():
     selected, warning = select_qt_platform({"DISPLAY": ":0"}, True, "linux", lambda: False)
     assert selected is None
-    assert warning and "sudo apt install libxcb-cursor0" in warning
+    assert warning and "Debian/Ubuntu: sudo apt install libxcb-cursor0)" in warning
 
 
 def unexpected_xcb_check() -> bool:

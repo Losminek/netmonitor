@@ -160,9 +160,12 @@ class MainWidget(QWidget):
         qpa = QGuiApplication.platformName()
         if qpa == "wayland":
             app = QApplication.instance()
-            if app is not None and app.property("xcb_fallback"):
-                return ("Wayland: XWayland (xcb) nešel použít – může chybět knihovna libxcb-cursor0. "
-                        "Na Debianu/Ubuntu ji nainstalujte: sudo apt install libxcb-cursor0 a restartujte aplikaci. "
+            fallback = app.property("xcb_fallback") if app is not None else None
+            if fallback in ("cursor", "other"):
+                reason = ("chybí knihovna libxcb-cursor0 (Debian/Ubuntu: sudo apt install libxcb-cursor0)"
+                          if fallback == "cursor" else
+                          "chybí knihovny xcb (Debian/Ubuntu: sudo apt install libxcb-cursor0 libxkbcommon-x11-0)")
+                return (f"Wayland: XWayland (xcb) nešel použít – {reason}. Po instalaci aplikaci restartujte. "
                         "Widget běží jako běžné okno bez možnosti určit pozici a vrstvu (pod okny / navrchu).")
             return ("Wayland: kompozitor nedovoluje aplikacím určovat pozici okna ani jeho vrstvu "
                     "(pod okny / navrchu). Widget běží jako běžné okno. Pro plnou funkčnost zapněte "
