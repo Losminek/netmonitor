@@ -55,6 +55,8 @@ class PingTarget:
     internet_probe: str = "auto"  # auto | yes | no – zda se cíl počítá do stavu internetu
     id: str = field(default_factory=new_id)
     kind: str = "target"          # target | section (nadpis skupiny – nic se nepinguje)
+    mac: str = ""                 # MAC adresa pro Wake-on-LAN (volitelné)
+    wol_broadcast: str = ""       # vlastní broadcast pro WoL (např. jiná podsíť; prázdné = automaticky)
 
     @property
     def is_section(self) -> bool:
@@ -69,6 +71,8 @@ class PingTarget:
             t.id = str(t.id or new_id())
             return t
         t.name = str(t.name).strip()[:64] or t.host
+        t.mac = str(t.mac or "").strip()[:32]
+        t.wol_broadcast = str(t.wol_broadcast or "").strip()[:15]
         t.host = str(t.host).strip()
         t.enabled = bool(t.enabled)
         t.interval_s = _clamp(t.interval_s, 1, 60, 2.0)
@@ -88,6 +92,14 @@ class PingTarget:
             return errs
         if host_kind(self.host) == "invalid":
             errs.append(f"Neplatná IP adresa nebo doména: {self.host!r}")
+        if self.mac:
+            from .wol import parse_mac
+            try:
+                parse_mac(self.mac)
+            except ValueError as e:
+                errs.append(str(e))
+        if self.wol_broadcast and host_kind(self.wol_broadcast) != "ipv4":
+            errs.append(f"Neplatná broadcast adresa pro WoL: {self.wol_broadcast!r}")
         if not (1 <= self.interval_s <= 60):
             errs.append("Interval musí být 1–60 s")
         if not (0.2 <= self.timeout_s <= 10):

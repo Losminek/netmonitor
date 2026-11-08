@@ -286,6 +286,7 @@ class WindowsIcmpPinger(Pinger):
                         ("Options", IP_OPTION_INFORMATION)]
 
         self._Reply = ICMP_ECHO_REPLY
+        self._Opt = IP_OPTION_INFORMATION
         self._create = lib.IcmpCreateFile
         self._create.restype = wintypes.HANDLE
         self._create.argtypes = []
@@ -334,6 +335,43 @@ class WindowsIcmpPinger(Pinger):
             # měřený čas dává sub-ms přesnost; použijeme ho, pokud odpovídá hlášené hodnotě
             rtt = measured if reported <= measured <= reported + 1.5 else reported
             return PingResult(PingStatus.OK, rtt_ms=rtt, address=address)
+        finally:
+            self._close(handle)
+
+    IP_TTL_EXPIRED_TRANSIT = 11013
+
+    def probe_ttl(self, address: str, ttl: int, timeout: float) -> tuple[str, str | None, float | None]:
+        """Jedna sonda traceroute: ('hop'|'reached'|'unreach'|'timeout'|'error', IP odpovídajícího, RTT ms)."""
+        import socket as _s
+        ct = self._ct
+        handle = self._create()
+        if not handle or handle == self._invalid:
+            return "error", None, None
+        try:
+            payload = b"NetMonitor-trace-probe-0123456789"
+            req = ct.create_string_buffer(payload, len(payload))
+            reply_size = ct.sizeof(self._Reply) + len(payload) + 8 + 64
+            buf = ct.create_string_buffer(reply_size)
+            opts = self._Opt()
+            opts.Ttl = max(1, min(255, int(ttl)))
+            dest = int.from_bytes(ipaddress.IPv4Address(address).packed, "little")
+            tmo = max(1, int(timeout * 1000))
+            t0 = time.perf_counter()
+            n = self._send(handle, dest, req, len(payload), ct.byref(opts), buf, reply_size, tmo)
+            measured = (time.perf_counter() - t0) * 1000.0
+            if n == 0:
+                return "timeout", None, None
+            rep = self._Reply.from_buffer(buf)
+            hop_ip = _s.inet_ntoa(int(rep.Address).to_bytes(4, "little"))
+            rtt = float(rep.RoundTripTime)
+            rtt = measured if rtt <= measured <= rtt + 1.5 else rtt
+            if rep.Status == self.IP_SUCCESS:
+                return "reached", hop_ip, rtt
+            if rep.Status == self.IP_TTL_EXPIRED_TRANSIT:
+                return "hop", hop_ip, rtt
+            if rep.Status in (11002, 11003, 11004, 11005):
+                return "unreach", hop_ip, rtt
+            return "timeout", None, None
         finally:
             self._close(handle)
 

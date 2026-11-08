@@ -82,7 +82,7 @@ def main(argv=None) -> int:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
         log.info("Wayland detekován – používám XWayland (xcb) kvůli pozici a vrstvě okna")
 
-    from PySide6.QtCore import QLockFile, QTimer
+    from PySide6.QtCore import QLockFile, Qt, QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
     from .gui.i18n import set_language
@@ -131,6 +131,7 @@ def main(argv=None) -> int:
         d = dialogs.get("history")
         if d is None:
             d = dialogs["history"] = HistoryDialog(ctrl)
+            d.tool_requested.connect(lambda k, i: tool(k, i))
         d.show_target(tid)
 
     def settings():
@@ -180,6 +181,35 @@ def main(argv=None) -> int:
     if tray:
         updates.available.connect(tray.set_update)
         tray.messageClicked.connect(lambda: updates.info and update_dialog())
+    from .gui import tools_dialog as tools
+
+    def traceroute(tid: str):
+        t = ctrl.cfg.target_by_id(tid)
+        if not t or t.is_section:
+            return
+        d = tools.TracerouteDialog(ctrl, t)
+        d.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        d.show()
+        d.start()
+
+    def wake(tid: str):
+        t = ctrl.cfg.target_by_id(tid)
+        if t and not t.is_section:
+            tools.wake(ctrl, t)
+
+    def speedtest():
+        d = dialogs.get("speedtest")
+        if d is None:
+            d = dialogs["speedtest"] = tools.SpeedTestDialog(ctrl)
+        d.show()
+        d.raise_()
+
+    def tool(kind: str, tid: str):
+        {"traceroute": traceroute, "wake": wake}.get(kind, lambda _t: speedtest())(tid)
+
+    widget.open_traceroute.connect(traceroute)
+    widget.wake_target.connect(wake)
+    widget.open_speedtest.connect(speedtest)
     widget.open_update.connect(update_dialog)
     widget.open_about.connect(about)
 

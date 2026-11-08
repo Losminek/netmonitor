@@ -70,6 +70,16 @@ class TargetDialog(QDialog):
         for k, lab in (("auto", "Automaticky (veřejné adresy ano)"), ("yes", "Ano"), ("no", "Ne")):
             self.probe.addItem(lab, k)
         self.probe.setCurrentIndex(["auto", "yes", "no"].index(self.t.internet_probe))
+        self.mac = QLineEdit(self.t.mac)
+        self.mac.setPlaceholderText("pro Wake-on-LAN, např. 04:D9:F5:15:34:86 (nepovinné)")
+        self.btn_mac = QPushButton("Zjistit")
+        self.btn_mac.setToolTip("Pingne zařízení a přečte jeho MAC z ARP tabulky (musí být zapnuté a v této síti)")
+        self.btn_mac.clicked.connect(self._detect_mac)
+        mac_row = QHBoxLayout()
+        mac_row.addWidget(self.mac, 1)
+        mac_row.addWidget(self.btn_mac)
+        self.wol_bc = QLineEdit(self.t.wol_broadcast)
+        self.wol_bc.setPlaceholderText("automaticky (jen pro zařízení v jiné podsíti)")
         self.err = QLabel()
         self.err.setProperty("error", True)
         self.err.setWordWrap(True)
@@ -82,6 +92,8 @@ class TargetDialog(QDialog):
         f.addRow("Ikona", self.icon)
         f.addRow("", self.show_rtt)
         f.addRow("Počítat do stavu internetu", self.probe)
+        f.addRow("MAC (Wake-on-LAN)", mac_row)
+        f.addRow("Broadcast pro WoL", self.wol_bc)
         f.addRow(self.err)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self._accept)
@@ -101,9 +113,37 @@ class TargetDialog(QDialog):
                           enabled=self.enabled.isChecked(), interval_s=self.interval.value(),
                           timeout_s=self.timeout.value(), retries=self.retries.value(),
                           icon=self.icon.currentData(), show_rtt=self.show_rtt.isChecked(),
-                          internet_probe=self.probe.currentData(), id=self.t.id)
+                          internet_probe=self.probe.currentData(), id=self.t.id,
+                          mac=self.mac.text().strip(), wol_broadcast=self.wol_bc.text().strip())
+
+    def _detect_mac(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        from ..core import wol
+        from ..core.ping_engine import Resolver, ping_host, select_pinger
+        host = self.host.text().strip()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            ip, _ = Resolver().resolve(host) if host else (None, "")
+            mac = None
+            if ip:
+                ping_host(ip, 0.8, select_pinger(), Resolver())
+                mac = wol.arp_lookup(ip)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if mac:
+            self.mac.setText(mac)
+            self.err.setText("")
+        else:
+            self.err.setText("MAC se nepodařilo zjistit – zařízení musí být zapnuté a ve stejné síti (ARP).")
 
     def _accept(self) -> None:
+        if self.mac.text().strip():
+            from ..core import wol
+            try:
+                self.mac.setText(wol.format_mac(self.mac.text()))
+            except ValueError:
+                pass
         errs = self.result_target().validate()
         if errs:
             self.err.setText("\n".join(errs))

@@ -20,6 +20,7 @@ EN: dict[str, str] = {
     "Průhlednost": "Opacity",
     "Průhlednost pozadí": "Background transparency",
     "O aplikaci…": "About…",
+    "Test rychlosti internetu…": "Internet speed test…",
     "Velikost": "Size",
     "Kompaktní": "Compact",
     "Výchozí (600 × 850)": "Default (600 × 850)",

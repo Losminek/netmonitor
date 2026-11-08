@@ -217,3 +217,43 @@ def test_background_transparency_menu(ctrl):
     assert ctrl.cfg.appearance.glass_alpha == 1.0                            # výchozí = neprůhledné
     w._set_appearance(glass_alpha=0.4)
     assert abs(ctrl.cfg.appearance.glass_alpha - 0.4) < 1e-9
+
+
+def test_row_context_menu_and_tool_dialogs(ctrl, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from netmonitor.core import traceroute as tr
+    from netmonitor.core.speedtest import SpeedResult
+    from netmonitor.gui import tools_dialog as tools
+    from netmonitor.gui.main_widget import MainWidget
+    from netmonitor.gui.settings_dialog import TargetDialog
+    w = MainWidget(ctrl)
+    ctrl.start()
+    w.show()
+    pump(1.0)
+    # editor cíle: pole MAC + normalizace
+    d = TargetDialog(ctrl.cfg.target_by_id("z"))
+    d.mac.setText("04-d9-f5-15-34-86")
+    d._accept()
+    assert d.result() and d.result_target().mac == "04:D9:F5:15:34:86"
+    # traceroute dialog s podvrženým během
+    def fake_run(host, on_hop, **kw):
+        on_hop(tr.Hop(1, "192.168.14.1", [0.4, 0.5, 0.4]))
+        on_hop(tr.Hop(2, None, [None, None, None]))
+        on_hop(tr.Hop(3, "10.0.0.1", [5.0, 5.1, 5.2], reached=True))
+        return "10.0.0.1", ""
+    monkeypatch.setattr(tr, "run", fake_run)
+    td = tools.TracerouteDialog(ctrl, ctrl.cfg.target_by_id("z"))
+    td.start()
+    pump(0.5)
+    assert td.table.rowCount() == 3 and "dosažen" in td.status.text()
+    td.close()
+    # test rychlosti – výsledek do UI a do historie
+    sd = tools.SpeedTestDialog(ctrl)
+    sd._result(SpeedResult(latency_ms=7.1, jitter_ms=0.8, download_mbps=940.0, upload_mbps=480.0, colo="PRG"))
+    pump(0.3)
+    assert sd.vals["download"].text() == "940 Mb/s" and "PRG" in sd.status.text()
+    assert any(e.kind == "speedtest" for e in ctrl.history.events(0))
+    sd.close()
+    # menu widgetu má test rychlosti
+    menu = w.build_menu()
+    assert any("Test rychlosti" in a.text() for a in menu.actions())

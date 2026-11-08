@@ -1,5 +1,12 @@
 # Změny
 
+## 1.3.0
+- Wake-on-LAN: pravým tlačítkem na cíl ve widgetu → Probudit; MAC adresa u cíle (tlačítko „Zjistit“ ji přečte z ARP)
+- Traceroute k cíli s živou tabulkou skoků (Windows nativně bez tracert)
+- Test rychlosti internetu (stahování, nahrávání, odezva, jitter) – menu widgetu i detail cíle
+- Pravé tlačítko na řádku cíle: detail a graf, testovat nyní, traceroute, probudit
+- Výklenek s číslem verze ve spodní hraně widgetu – odkaz na zelina.eu/projekty
+
 ## 1.2.0
 - Automatické aktualizace: odznak nové verze ve widgetu a v ikoně lišty, jedním klikem stažení (ověření SHA-256), tichá instalace a restart; volitelně plně automaticky
 - Výchozí neprůhledné pozadí, posuvník průhlednosti pozadí 0–100 % (Nastavení → Vzhled i pravé tlačítko)

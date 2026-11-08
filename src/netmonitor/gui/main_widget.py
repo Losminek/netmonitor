@@ -65,6 +65,9 @@ class MainWidget(QWidget):
     open_history = Signal(str)
     open_ipconfig = Signal(str)
     open_update = Signal()
+    open_traceroute = Signal(str)
+    wake_target = Signal(str)
+    open_speedtest = Signal()
     open_about = Signal()
     quit_requested = Signal()
     visibility_toggled = Signal(bool)
@@ -75,6 +78,7 @@ class MainWidget(QWidget):
         self.setWindowTitle("NetMonitor")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setMouseTracking(True)          # kurzor "ruka" nad výklenkem s verzí
         self._scale = 1.0
         self._press_pos: QPoint | None = None
         self._dragging = False
@@ -119,7 +123,7 @@ class MainWidget(QWidget):
             self._restore_geometry(cfg)
         self._scale = self._compute_scale()
         s = self._scale
-        self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(26 * s))
+        self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(30 * s))
         self.title.set_style(s, a.neon_effects)
         self.net.apply_style(cfg, s)
         self.ping.apply_style(cfg, s)
@@ -190,6 +194,7 @@ class MainWidget(QWidget):
         p = QPainter(self)
         a = self.ctrl.cfg.appearance
         theme.paint_glass_panel(p, QRectF(self.rect()), a.glass_alpha, a.neon_effects, self._scale)
+        self._paint_brand(p)
         if self.update_version:
             from .icons import draw_update_arrow
             r = self._badge_rect()
@@ -202,6 +207,71 @@ class MainWidget(QWidget):
             p.setBrush(QColor("#22d3ff"))
             p.drawEllipse(r)
             draw_update_arrow(p, r, QColor(8, 30, 58), max(1.6, 2.2 * self._scale))
+
+    # ------------------------------------------------------------------ výklenek s verzí → zelina.eu/projekty
+    PROJECTS_URL = "https://zelina.eu/projekty.html"
+
+    def _brand_text(self) -> str:
+        from .. import __version__
+        return f"v{__version__}  ·  zelina.eu"
+
+    def _brand_font(self):
+        f = theme.font("body", 11.5, theme.QFont.Weight.Medium, self._scale)
+        f.setLetterSpacing(theme.QFont.SpacingType.PercentageSpacing, 106)
+        return f
+
+    def _brand_rect(self) -> QRectF:
+        from PySide6.QtGui import QFontMetricsF
+        s = self._scale
+        fm = QFontMetricsF(self._brand_font())
+        w = fm.horizontalAdvance(self._brand_text()) + 34 * s
+        h = fm.height() + 6 * s
+        bottom = self.height() - 6
+        return QRectF(6 + 34 * s, bottom - h, w, h)
+
+    def _paint_brand(self, p: QPainter) -> None:
+        from PySide6.QtGui import QPainterPath
+        r = self._brand_rect()
+        s = self._scale
+        ch = r.height() * 0.75                     # zkosené boky jako "tab" nahoře vpravo
+        path = QPainterPath()
+        path.moveTo(r.left(), r.bottom())
+        path.lineTo(r.left() + ch, r.top())
+        path.lineTo(r.right() - ch, r.top())
+        path.lineTo(r.right(), r.bottom())
+        hover = getattr(self, "_brand_hover", False)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fill = QColor(6, 26, 50) if self.ctrl.cfg.appearance.glass_alpha > 0.3 else QColor(6, 26, 50, 170)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawPath(path)
+        p.setPen(QPen(QColor(64, 220, 255, 255 if hover else 200), 1.4 * s))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        p.setFont(self._brand_font())
+        p.setPen(QColor("#eaf6ff") if hover else QColor(56, 217, 255, 220))
+        p.drawText(r.adjusted(0, 1 * s, 0, 0), Qt.AlignmentFlag.AlignCenter, self._brand_text())
+
+    def _open_projects(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(self.PROJECTS_URL))
+
+    def mouseMoveEvent(self, e):
+        inside = self._brand_rect().contains(e.position())
+        if inside != getattr(self, "_brand_hover", False):
+            self._brand_hover = inside
+            self.setCursor(Qt.CursorShape.PointingHandCursor if inside else Qt.CursorShape.ArrowCursor)
+            self.update(self._brand_rect().toAlignedRect().adjusted(-3, -3, 3, 3))
+        super().mouseMoveEvent(e)
+
+    def event(self, e):
+        if e.type() == QEvent.Type.ToolTip and self._brand_rect().contains(e.position() if hasattr(e, "position")
+                                                                          else QPointF(e.pos())):
+            from PySide6.QtWidgets import QToolTip
+            QToolTip.showText(e.globalPos(), "Další projekty – zelina.eu/projekty", self)
+            return True
+        return super().event(e)
 
     def _badge_rect(self) -> QRectF:
         s = self._scale
@@ -221,7 +291,7 @@ class MainWidget(QWidget):
             self._scale = new_scale
             s = new_scale
             cfg = self.ctrl.cfg
-            self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(26 * s))
+            self._layout.setContentsMargins(int(34 * s), int(38 * s), int(32 * s), int(30 * s))
             self.title.set_style(s, cfg.appearance.neon_effects)
             self.net.apply_style(cfg, s)
             self.ping.apply_style(cfg, s)
@@ -308,6 +378,9 @@ class MainWidget(QWidget):
             if was_drag:
                 self.remember_geometry()
                 return True
+            if self._brand_rect().contains(self.mapFromGlobal(gp).toPointF()):
+                self._open_projects()
+                return True
             if self.update_version and self._badge_rect().contains(self.mapFromGlobal(gp).toPointF()):
                 self.open_update.emit()
                 return True
@@ -325,7 +398,25 @@ class MainWidget(QWidget):
         return False
 
     def contextMenuEvent(self, e):
-        self.build_menu().exec(e.globalPos())
+        m = self.build_menu()
+        row = self.ping.row_at(e.globalPos())
+        if row is not None:
+            t = row.target
+            first = m.actions()[0] if m.actions() else None
+            title = QAction(f"{t.name}  ({t.host})", m)
+            title.setEnabled(False)
+            items = [title]
+            for label, fn in (("Detail a graf…", lambda: self.open_history.emit(t.id)),
+                              ("Testovat nyní", lambda: self.ctrl.test_now(t.id)),
+                              ("Traceroute…", lambda: self.open_traceroute.emit(t.id)),
+                              ("Probudit (Wake-on-LAN)" + ("" if t.mac else " …"),
+                               lambda: self.wake_target.emit(t.id))):
+                a = QAction(label, m)
+                a.triggered.connect(fn)
+                items.append(a)
+            m.insertActions(first, items)
+            m.insertSeparator(first)
+        m.exec(e.globalPos())
 
     # ------------------------------------------------------------------ menu (sdílené s tray)
     def build_menu(self, parent=None, for_tray: bool = False) -> QMenu:
@@ -346,6 +437,7 @@ class MainWidget(QWidget):
             m.addSeparator()
         m.addAction(tr("Nastavení…"), self.open_settings.emit)
         m.addAction(tr("Historie…"), lambda: self.open_history.emit(""))
+        m.addAction(tr("Test rychlosti internetu…"), self.open_speedtest.emit)
         act_if = self.ctrl.network.active if self.ctrl.network else None
         m.addAction(tr("Nastavit IP adresu…"), lambda: self.open_ipconfig.emit(act_if.name if act_if else ""))
         m.addSeparator()

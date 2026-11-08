@@ -5,7 +5,7 @@ import math
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -20,7 +20,7 @@ from .ping_panel import fmt_rtt
 RANGES = [("1 hodina", 3600, 0), ("24 hodin", 86400, 300), ("7 dní", 7 * 86400, 3600), ("30 dní", 30 * 86400, 4 * 3600)]
 EVENT_LABELS = {"down": "Výpadek", "up": "Obnovení", "wan_change": "Změna WAN IP", "internet_down": "Výpadek internetu",
                 "internet_up": "Internet obnoven", "high_latency": "Vysoká latence",
-                "ip_config": "Změna nastavení IP"}
+                "ip_config": "Změna nastavení IP", "speedtest": "Test rychlosti", "wol": "Wake-on-LAN"}
 
 
 class Chart(QWidget):
@@ -151,6 +151,8 @@ def _nice(v: float) -> float:
 
 
 class HistoryDialog(QDialog):
+    tool_requested = Signal(str, str)     # ("traceroute"|"wake"|"speedtest", id cíle)
+
     def __init__(self, ctrl: Controller, parent=None):
         super().__init__(parent)
         self.ctrl = ctrl
@@ -201,6 +203,16 @@ class HistoryDialog(QDialog):
         self.events.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.events.setAlternatingRowColors(True)
         v.addWidget(self.events, 2)
+        tools = QHBoxLayout()
+        for label, sig in (("Traceroute…", "traceroute"), ("Probudit (Wake-on-LAN)", "wake")):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, s=sig: self.tool_requested.emit(s, self.combo.currentData() or ""))
+            tools.addWidget(b)
+        b = QPushButton("Test rychlosti internetu…")
+        b.clicked.connect(lambda: self.tool_requested.emit("speedtest", ""))
+        tools.addWidget(b)
+        tools.addStretch(1)
+        v.addLayout(tools)
         bot = QHBoxLayout()
         for label, fn in (("Export měření (CSV)…", self._export_samples), ("Export událostí (CSV)…", self._export_events)):
             b = QPushButton(label)
