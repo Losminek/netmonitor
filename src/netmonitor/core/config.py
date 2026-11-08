@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 import os
 import tempfile
 import uuid
@@ -15,10 +14,9 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from ..utils.local_json import quarantine_json, read_json_object
 from ..utils.paths import config_dir
 from ..utils.validation import host_kind
-
-log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 3
 CONFIG_FILENAME = "config.json"
@@ -35,7 +33,7 @@ def new_id() -> str:
 def _clamp(v: Any, lo: float, hi: float, default: float) -> float:
     try:
         f = float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     if f != f:  # NaN
         return default
@@ -213,14 +211,16 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "AppConfig":
+        if data is not None and not isinstance(data, dict):
+            raise ValueError("Konfigurace musí být JSON objekt")
         data = migrate_dict(dict(data or {}))
         cfg = cls()
         cfg.general = _load_dc(GeneralConfig, data.get("general"))
-        ap = data.get("appearance") or {}
+        ap = data.get("appearance")
         cfg.appearance = _load_dc(AppearanceConfig, ap)
         cfg.appearance.colors = _load_dc(StatusColors, ap.get("colors") if isinstance(ap, dict) else None)
         cfg.network = _load_dc(NetworkConfig, data.get("network"))
-        pg = data.get("ping") or {}
+        pg = data.get("ping")
         cfg.ping = _load_dc(PingConfig, pg)
         cfg.ping.thresholds = _load_dc(Thresholds, pg.get("thresholds") if isinstance(pg, dict) else None)
         raw_targets = pg.get("targets") if isinstance(pg, dict) and "targets" in pg else None
@@ -271,11 +271,28 @@ class AppConfig:
 
 def _load_dc(cls, data):
     obj = cls()
-    if not isinstance(data, dict):
+    if data is None:
         return obj
+    if not isinstance(data, dict):
+        raise ValueError(f"{cls.__name__} musí být JSON objekt")
     for f in fields(cls):
-        if f.name in data and not hasattr(getattr(obj, f.name), "__dataclass_fields__"):
-            setattr(obj, f.name, data[f.name])
+        default = getattr(obj, f.name)
+        if f.name not in data or hasattr(default, "__dataclass_fields__"):
+            continue
+        value = data[f.name]
+        # Typy ověřujeme před předáním do Qt a monitoringu. Číselné meze
+        # nadále řeší normalized(); x/y musí navíc vejít do Qt signed int.
+        if default is None:
+            valid = value is None or (type(value) is int and -(2**31) <= value < 2**31)
+        elif isinstance(default, bool):
+            valid = isinstance(value, bool)
+        elif isinstance(default, (int, float)):
+            valid = type(value) in (int, float) and -float("inf") < value < float("inf")
+        else:
+            valid = isinstance(value, type(default))
+        if not valid:
+            raise ValueError(f"Neplatný typ nebo hodnota {cls.__name__}.{f.name}")
+        setattr(obj, f.name, value)
     return obj
 
 
@@ -357,17 +374,12 @@ def default_config_path() -> Path:
 
 def load_config(path: Path | None = None) -> AppConfig:
     path = path or default_config_path()
-    if not path.exists():
-        return AppConfig.from_dict({})
     try:
-        with open(path, encoding="utf-8") as f:
-            return AppConfig.from_dict(json.load(f))
-    except (OSError, json.JSONDecodeError, TypeError) as e:
-        log.error("Konfigurace %s je poškozená (%s) – používám výchozí, původní zálohuji", path, e)
-        try:
-            path.replace(path.with_suffix(".broken.json"))
-        except OSError:
-            pass
+        return AppConfig.from_dict(read_json_object(path))
+    except FileNotFoundError:
+        return AppConfig.from_dict({})
+    except (OSError, ValueError, TypeError) as e:
+        quarantine_json(path, e)
         return AppConfig.from_dict({})
 
 
@@ -389,7 +401,17 @@ def atomic_write_json(path: Path, data: Any) -> None:
 
 
 def save_config(cfg: AppConfig, path: Path | None = None) -> None:
-    atomic_write_json(path or default_config_path(), cfg.normalized().to_dict())
+    path = path or default_config_path()
+    # Když při load selhalo odložení (např. oprávnění), pozdější autosave
+    # nesmí originál přepsat. Chrání i soubor poškozený až za běhu aplikace.
+    try:
+        AppConfig.from_dict(read_json_object(path))
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError) as e:
+        if not quarantine_json(path, e):
+            raise OSError(f"Konfiguraci {path} nelze uložit bez zálohy původního souboru") from e
+    atomic_write_json(path, cfg.normalized().to_dict())
 
 
 def export_config(cfg: AppConfig, path: Path) -> None:
