@@ -378,6 +378,7 @@ class WolDialog(QDialog):
 
     def _checked(self, attempt: int, result: PingResult) -> None:
         self.pending -= 1
+        first_success = result.ok and (self._best_result is None or not self._best_result.ok)
         # Úspěch dokazuje probuzení i při pozdější ztrátě paketu. Do té doby zobrazuj poslední chybu.
         if self._best_result is None or not self._best_result.ok:
             self._best_result = result
@@ -387,7 +388,8 @@ class WolDialog(QDialog):
         earlier = " Cíl odpověděl při dřívějším ověření." if best.ok and not result.ok else ""
         text = f"Ověření {attempt}/3: {self.target.name} – {detail}.{earlier}"
         self._status(text)
-        if not self.isVisible():
+        # Nejvýše jedna notifikace: první úspěch, jinak až dokončení všech tří kontrol.
+        if not self.isVisible() and (first_success or (self.pending == 0 and not best.ok)):
             self.ctrl.notification.emit(Notification("wol", f"wol:{self.target.id}",
                                                      f"Wake-on-LAN – {self.target.name}", text))
         current = self.ctrl.cfg.target_by_id(self.target.id)
