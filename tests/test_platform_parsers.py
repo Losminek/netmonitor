@@ -1,7 +1,6 @@
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -11,41 +10,44 @@ from netmonitor.gui.controller import Controller
 from netmonitor.platform import linux, macos, windows
 
 
-@pytest.mark.parametrize("frozen", [False, True])
-@pytest.mark.parametrize("minimized", [False, True])
-def test_autostart_appimage_path(tmp_path, monkeypatch, frozen, minimized):
-    """Regrese L23: autostart AppImage nesmí odkazovat na dočasný mount ani použít shellové uvozovky."""
-    appimage = "/opt/apps/Net Monitor.AppImage"
-    monkeypatch.setenv("APPIMAGE", appimage)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+@pytest.fixture
+def appimage_runtime(tmp_path, monkeypatch):
+    appimage = tmp_path / "Net Monitor.AppImage"
+    appimage.touch()
+    appdir = tmp_path / "mount"
+    executable = appdir / "usr" / "bin" / "NetMonitor"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    monkeypatch.setenv("APPIMAGE", str(appimage))
+    monkeypatch.setenv("APPDIR", str(appdir))
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
-    monkeypatch.setattr(sys, "executable", "/tmp/.mount_NetMonitor/usr/bin/NetMonitor")
-    checked = []
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+    return appimage, appdir, executable
 
-    def is_file(path):
-        checked.append(str(path))
-        return str(path) == appimage
 
-    monkeypatch.setattr(Path, "is_file", is_file)
+@pytest.mark.parametrize("minimized", [False, True])
+def test_autostart_appimage_path(tmp_path, monkeypatch, appimage_runtime, minimized):
+    """Regrese L23: skutečný soubor AppImage s mezerou funguje i ve Windows test runneru."""
+    appimage, _, _ = appimage_runtime
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     cfg = AppConfig()
     cfg.general.start_minimized = minimized
     command = Controller.autostart_command(Mock(cfg=cfg))
-    assert command == [appimage] + (["--minimized"] if minimized else [])
-    assert checked == [appimage]
+    assert command == [str(appimage)] + (["--minimized"] if minimized else [])
     linux.set_autostart(True, command)
     content = (tmp_path / "autostart" / "netmonitor.desktop").read_text(encoding="utf-8")
-    expected = 'Exec="/opt/apps/Net Monitor.AppImage"' + (" --minimized" if minimized else "")
+    escaped_path = str(appimage).replace("\\", r"\\\\").replace("%", "%%")
+    expected = f'Exec="{escaped_path}"' + (" --minimized" if minimized else "")
     assert expected in content.splitlines()
 
 
 @pytest.mark.parametrize("appimage", [None, "", "missing", "directory"])
 @pytest.mark.parametrize("frozen", [False, True])
-def test_autostart_appimage_fallback(tmp_path, monkeypatch, appimage, frozen):
+def test_autostart_appimage_fallback(tmp_path, monkeypatch, appimage_runtime, appimage, frozen):
     """Regrese L23: chybějící AppImage ani adresář nesmí přepsat původní příkaz."""
-    monkeypatch.setattr(sys, "platform", "linux")
+    _, _, executable = appimage_runtime
     monkeypatch.setattr(sys, "frozen", frozen, raising=False)
-    monkeypatch.setattr(sys, "executable", "/opt/netmonitor/python")
     if appimage is None:
         monkeypatch.delenv("APPIMAGE", raising=False)
     else:
@@ -53,8 +55,41 @@ def test_autostart_appimage_fallback(tmp_path, monkeypatch, appimage, frozen):
     (tmp_path / "directory").mkdir()
     cfg = AppConfig()
     cfg.general.start_minimized = True
-    assert Controller.autostart_command(Mock(cfg=cfg)) == ["/opt/netmonitor/python"] + (
+    assert Controller.autostart_command(Mock(cfg=cfg)) == [str(executable)] + (
         ["--minimized"] if frozen else ["-m", "netmonitor"])
+
+
+@pytest.mark.parametrize("invalid", ["not_frozen", "relative_image", "unset_appdir", "empty_appdir",
+                                     "outside_appdir", "sibling_appdir", "traversal"])
+@pytest.mark.parametrize("minimized", [False, True])
+def test_autostart_inherited_appimage(tmp_path, monkeypatch, appimage_runtime, invalid, minimized):
+    """Regrese L23/B2/M1: zděděná APPIMAGE smí být použita jen pro vlastní frozen proces uvnitř APPDIR."""
+    appimage, appdir, executable = appimage_runtime
+    if invalid == "not_frozen":
+        monkeypatch.setattr(sys, "frozen", False)
+    elif invalid == "relative_image":
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("APPIMAGE", appimage.name)
+    elif invalid == "unset_appdir":
+        monkeypatch.delenv("APPDIR")
+    elif invalid == "empty_appdir":
+        monkeypatch.setenv("APPDIR", "")
+    else:
+        executable = {
+            "outside_appdir": tmp_path / "NetMonitor",
+            "sibling_appdir": tmp_path / "mount-other" / "NetMonitor",
+            "traversal": appdir / ".." / "NetMonitor",
+        }[invalid]
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.touch()
+        monkeypatch.setattr(sys, "executable", str(executable))
+    cfg = AppConfig()
+    cfg.general.start_minimized = minimized
+    if invalid == "not_frozen":
+        expected = [str(executable), "-m", "netmonitor"]
+    else:
+        expected = [str(executable)] + (["--minimized"] if minimized else [])
+    assert Controller.autostart_command(Mock(cfg=cfg)) == expected
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin"])
