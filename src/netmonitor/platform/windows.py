@@ -310,10 +310,11 @@ def dhcp_enabled(iface: str) -> bool | None:
 def ip_config_details(iface: str) -> dict:
     """GAA poskytne údaje karty, režim DNS pochází z jejího TCP/IP klíče registru."""
     d = adapter_details().get(iface, {})
-    state: dict = {"dhcp": d.get("dhcp")}
-    if "gateways" in d:
+    state: dict = {"dhcp": d.get("dhcp"), "gateway": None, "dns": None}
+    has_ipv4 = any(":" not in ip for ip in d.get("ips", []))
+    if d.get("up") and has_ipv4 and "gateways" in d:
         state["gateway"] = next((g for g in d["gateways"] if ":" not in g), "")
-    if "dns" in d:
+    if d.get("up") and has_ipv4 and "dns" in d:
         state["dns"] = tuple(g for g in d["dns"] if ":" not in g)
     if d.get("guid"):
         try:

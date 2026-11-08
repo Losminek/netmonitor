@@ -187,6 +187,9 @@ class Controller(QObject):
 
         from .. import platform as plat
 
+        if "ip-apply" in self._busy:
+            done((False, "Probíhá jiná změna IP"))
+            return
         settings = deepcopy(settings)
         errors, _ = settings.validate()
         if errors:

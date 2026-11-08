@@ -223,13 +223,18 @@ def test_guard_rejects_real_network_writes():
     """Pojistka AC-005 skutečně zachytí i přímé spuštění zakázaných příkazů."""
     import subprocess
     from netmonitor.platform import linux, macos, windows
+    from .conftest import _install_network_change_guard
     for module in (linux, macos, windows):
         with pytest.raises(AssertionError, match="změnit nastavení sítě"):
             module.apply_ip(IpSettings(iface="other-test"))
-    for args in (["nmcli", "connection", "modify", "test"], ["nmcli", "connection", "up", "test"],
-                 ["netsh", "test"], ["pkexec", "test"], ["networksetup", "test"]):
-        with pytest.raises(AssertionError, match="změnit nastavení sítě"):
-            subprocess.run(args, check=False)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("Zápis dosáhl mocku procesu"))
+        _install_network_change_guard(patch)
+        for args in (["nmcli", "connection", "modify", "test"], ["nmcli", "connection", "up", "test"],
+                     ["netsh", "interface", "ipv4", "set", "address", "test"],
+                     ["pkexec", "test"], ["networksetup", "-setdhcp", "test"]):
+            with pytest.raises(AssertionError, match="změnit nastavení sítě"):
+                subprocess.run(args, check=False)
 
 
 def test_confirmed_settings_reach_only_mock_and_preserve_all_dns(editor, monkeypatch):
@@ -279,3 +284,99 @@ def test_controller_validates_immutable_copy_before_background_write(editor, mon
     settings.dns[0] = "invalid"
     queued[0]()
     assert applied[0].prefix == 16 and applied[0].dns_list == list(DNS)
+
+
+def test_reopen_during_apply_keeps_write_busy_and_defers_reload(editor, monkeypatch):
+    """Regrese review 2: nové otevření nesmí uvolnit formulář během zápisu IP."""
+    dialog, ctrl, _ = editor
+    callbacks = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda _: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(ctrl, "apply_ip", lambda settings, done: callbacks.append(done))
+    dialog.open_for("other-test")
+    wait_for(lambda: not dialog._busy)
+    dialog._apply()
+    assert len(callbacks) == 1 and dialog._busy
+    generation = dialog._load_generation
+    dialog.close()
+    dialog.open_for("active-test")
+    assert dialog._load_generation == generation
+    assert dialog.adapter.currentData() == "other-test"
+    assert dialog._reload_pending and dialog._busy
+    assert not dialog.btn_apply.isEnabled()
+    dialog._set_busy(False)  # ani dokončení čtecí úlohy nesmí ukončit zápisový busy
+    assert dialog._busy and not dialog.btn_apply.isEnabled()
+    dialog._apply()
+    assert len(callbacks) == 1
+    callbacks[0]((True, "mock"))
+    assert not dialog._busy and not dialog.btn_apply.isEnabled()
+    ctrl.network_updated.emit(ctrl.network)
+    wait_for(lambda: not dialog._busy)
+    assert dialog.btn_apply.isEnabled() and not dialog._reload_pending
+
+
+def test_controller_reports_concurrent_apply_instead_of_discarding_it(editor, monkeypatch):
+    """Regrese review 2: druhý zápis musí dostat výsledek, ne se ztratit v _run_bg."""
+    _, ctrl, fake = editor
+    started, release = threading.Event(), threading.Event()
+    calls, first, second = [], [], []
+
+    def delayed(settings):
+        calls.append(settings)
+        started.set()
+        assert release.wait(3)
+        return False, "mock only"
+
+    monkeypatch.setattr(fake, "apply_ip", delayed, raising=False)
+    try:
+        ctrl.apply_ip(IpSettings(iface="other-test"), first.append)
+        wait_for(started.is_set)
+        ctrl.apply_ip(IpSettings(iface="active-test"), second.append)
+        assert second == [(False, "Probíhá jiná změna IP")]
+        assert not first and len(calls) == 1
+    finally:
+        release.set()
+        wait_for(lambda: bool(first))
+    assert first == [(False, "mock only")] and len(calls) == 1
+
+
+def test_multiple_ipv4_addresses_block_apply_even_after_profile_load(editor, monkeypatch):
+    """Regrese review 2: editor nesmí tiše odstranit další IPv4 adresy karty."""
+    import netmonitor.core.network_info as network
+    dialog, ctrl, _ = editor
+    original = network._psutil_interfaces
+
+    def multiple():
+        interfaces = original()
+        interfaces["other-test"]["ipv4"] = ("198.51.100.20", "198.51.100.21")
+        interfaces["other-test"]["ipv4_masks"] = ("255.255.0.0", "255.255.0.0")
+        return interfaces
+
+    monkeypatch.setattr(network, "_psutil_interfaces", multiple)
+    monkeypatch.setattr(ctrl, "apply_ip", lambda *a: pytest.fail("Více IPv4 adres musí blokovat zápis"))
+    dialog.open_for("other-test")
+    wait_for(lambda: not dialog._busy)
+    assert "karta má více IPv4 adres – změnu proveďte v nastavení systému" in dialog.msg.text()
+    assert not dialog.btn_apply.isEnabled()
+    ctrl.cfg.network.ip_profiles = [IpSettings(iface="other-test").to_profile("DHCP")]
+    dialog._fill_profiles()
+    dialog.profiles.setCurrentIndex(0)
+    dialog._load_profile()
+    assert not dialog.btn_apply.isEnabled()
+    dialog._apply()
+
+
+def test_ipv6_dns_blocks_apply_even_when_switching_to_automatic_dns(editor, monkeypatch):
+    """Regrese review 2: nahrazení seznamu DNS nesmí skrytě odstranit IPv6 resolver."""
+    dialog, ctrl, _ = editor
+    known = ctrl.net_provider.ip_configuration("other-test")
+    monkeypatch.setattr(ctrl.net_provider, "ip_configuration",
+                        lambda _: replace(known, dns=DNS + ("2001:db8::53",)))
+    monkeypatch.setattr(ctrl, "apply_ip", lambda *a: pytest.fail("IPv6 DNS musí blokovat zápis"))
+    dialog.open_for("other-test")
+    wait_for(lambda: not dialog._busy)
+    assert "2001:db8::53" in dialog.current.text()
+    assert not dialog.btn_apply.isEnabled()
+    dialog.rb_dns_auto.setChecked(True)
+    assert "IPv6 DNS" in dialog.msg.text()
+    assert not dialog.btn_apply.isEnabled()
+    dialog._apply()

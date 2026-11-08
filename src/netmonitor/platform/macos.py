@@ -118,7 +118,7 @@ def ip_config_details(iface: str) -> dict:
     gateway = re.search(r"^Router:\s*(.*?)$", out, re.M)
     if gateway:
         value = gateway.group(1).strip()
-        state["gateway"] = "" if value in ("none", "0.0.0.0") else value
+        state["gateway"] = "" if value in ("none", "0.0.0.0", "(null)") else value
     dns_out = run_cmd(["networksetup", "-getdnsservers", svc], timeout=3)
     if dns_out and "There aren't any DNS Servers set on" in dns_out:
         state["dns_dhcp"] = True
@@ -126,14 +126,13 @@ def ip_config_details(iface: str) -> dict:
             "DNS configuration (for scoped queries)")[2]
         for sec in re.split(r"\n(?=resolver #\d+)", scoped):
             if re.search(rf"if_index\s*:\s*\d+\s*\({re.escape(iface)}\)", sec):
-                state["dns"] = tuple(a for a in re.findall(r"nameserver\[\d+\]\s*:\s*(\S+)", sec)
-                                     if ":" not in a)
+                state["dns"] = tuple(re.findall(r"nameserver\[\d+\]\s*:\s*(\S+)", sec))
                 break
     elif dns_out:
         from ipaddress import ip_address
         try:
             servers = [ip_address(a.strip()) for a in dns_out.splitlines() if a.strip()]
-            state["dns"] = tuple(str(a) for a in servers if a.version == 4)
+            state["dns"] = tuple(str(a) for a in servers)
             state["dns_dhcp"] = False
         except ValueError:
             pass

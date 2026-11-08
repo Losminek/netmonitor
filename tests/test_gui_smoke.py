@@ -165,7 +165,10 @@ def test_ipconfig_dialog_prefill_and_validation(ctrl, monkeypatch):
         iface, a.ipv4[0], a.ipv4_masks[0], a.gateway, a.dns, True, True))
     d = IpConfigDialog(ctrl)
     d.open_for("Ethernet 10Gb")
-    pump(0.2)
+    deadline = time.monotonic() + 3
+    while d._busy and time.monotonic() < deadline:
+        pump(0.02)
+    assert not d._busy, "Načtení konfigurace karty nedoběhlo"
     assert d.rb_dhcp.isChecked() and d.ip.text() == "198.51.100.112" and d.netmask.text() == "255.255.255.0"
     assert "DHCP" in d.current.text()
     d.rb_static.setChecked(True)

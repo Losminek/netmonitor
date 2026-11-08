@@ -17,8 +17,7 @@ def _isolated_home(tmp_path, monkeypatch):
     yield
 
 
-@pytest.fixture(autouse=True)
-def _no_network_changes(monkeypatch):
+def _install_network_change_guard(monkeypatch):
     """Pojistka AC-005: skutečné zápisy sítě nesmí spustit žádný test sady."""
     from netmonitor.platform import linux, macos, windows
 
@@ -31,13 +30,28 @@ def _no_network_changes(monkeypatch):
 
     def guarded_popen(args, *positional, **kwargs):
         parts = shlex.split(args) if isinstance(args, str) else [os.fsdecode(a) for a in args]
-        names = [Path(a).name.lower() for a in parts]
-        if any(n in ("pkexec", "netsh", "netsh.exe", "networksetup") for n in names):
+        program = Path(parts[0].replace("\\", "/")).name.lower() if parts else ""
+        options = [a.lower() for a in parts[1:]]
+        if program == "pkexec":
             forbidden()
-        if "nmcli" in names and any(n in ("modify", "up") for n in names):
+        if program == "networksetup" and any(a.startswith(("-set", "-create", "-remove", "-add", "-delete"))
+                                              for a in options):
             forbidden()
-        if any("with administrator privileges" in a or "ShellExecute" in a for a in parts):
+        if program in ("netsh", "netsh.exe") and options[:1] == ["interface"] \
+                and any(a in ("set", "add", "delete", "reset") for a in options[1:]):
+            forbidden()
+        if program == "nmcli" and any(
+                obj in ("connection", "con", "c", "device", "dev", "d")
+                and action in ("modify", "mod", "up", "reapply", "connect")
+                for obj, action in zip(options, options[1:])):
+            forbidden()
+        if program == "osascript" and any("administrator privileges" in a for a in options):
             forbidden()
         return popen(args, *positional, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", guarded_popen)
+
+
+@pytest.fixture(autouse=True)
+def _no_network_changes(monkeypatch):
+    _install_network_change_guard(monkeypatch)
