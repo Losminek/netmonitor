@@ -82,9 +82,9 @@ def test_dialogs_open(ctrl):
     pump(1.5)
     s = SettingsDialog(ctrl, w)
     s.show()
-    assert s.table.rowCount() == 2
+    assert s.table.topLevelItemCount() == 2
     from PySide6.QtCore import Qt
-    s.table.item(1, 0).setCheckState(Qt.CheckState.Unchecked)
+    s.table.topLevelItem(1).setCheckState(0, Qt.CheckState.Unchecked)
     pump(0.2)
     assert ctrl.cfg.target_by_id("d").enabled is False
     h = HistoryDialog(ctrl)
@@ -106,3 +106,80 @@ def test_shutdown_is_clean(ctrl):
     assert not ctrl.engine.running
     alive = [t.name for t in threading.enumerate() if t.name.startswith(("ping", "bg"))]
     assert alive == []
+
+
+def test_sections_in_widget_and_settings(ctrl):
+    from netmonitor.core.config import new_section
+    from netmonitor.gui.main_widget import MainWidget
+    from netmonitor.gui.settings_dialog import SettingsDialog
+    w = MainWidget(ctrl)
+    ctrl.start()
+    cfg = ctrl.cfg.copy()
+    cfg.ping.targets.insert(0, new_section("Domény"))
+    cfg.ping.targets.insert(2, new_section("Zařízení"))
+    ctrl.update_config(cfg)
+    pump(1.5)
+    assert len(w.ping.sections) == 2 and len(w.ping.rows) == 2
+    assert ctrl.snapshots["z"].ok_count >= 1
+    s = SettingsDialog(ctrl, w)
+    s.show()
+    t = s.table
+    assert t.topLevelItemCount() == 2 and t.topLevelItem(0).childCount() == 1
+    assert t.flat_ids() == [x.id for x in ctrl.cfg.ping.targets]
+    # přetažení (simulace výsledku dropu): sekce Zařízení nahoru
+    sec2 = ctrl.cfg.ping.targets[2].id
+    s._order_from_tree([sec2, "d", ctrl.cfg.ping.targets[0].id, "z"])
+    pump(0.3)
+    assert [x.id for x in ctrl.cfg.ping.targets][:2] == [sec2, "d"]
+    assert list(w.ping._order)[:2] == [sec2, "d"]
+    # šipka: sekce dolů
+    t.select_id = sec2
+    s._fill_table()
+    s._move(1)
+    assert [x.id for x in ctrl.cfg.ping.targets][-2:] == [sec2, "d"]
+    s.close()
+
+
+def test_ipconfig_dialog_prefill_and_validation(ctrl, monkeypatch):
+    from netmonitor.core.network_info import InterfaceInfo, NetworkSnapshot
+    from netmonitor.gui.ipconfig_dialog import IpConfigDialog
+    import netmonitor.platform as plat
+    a = InterfaceInfo(name="Ethernet 10Gb", display_name="Ethernet 10Gb", kind="ethernet", is_up=True,
+                      ipv4=("192.168.14.112",), ipv4_masks=("255.255.255.0",), gateway="192.168.14.1",
+                      dns=("192.168.14.2", "192.168.14.3"))
+    ctrl.network = NetworkSnapshot(active=a, interfaces=(a,), has_default_route=True, default_iface=a.name)
+
+    class FakePlat:
+        applied = []
+
+        @staticmethod
+        def dhcp_enabled(_i):
+            return True
+
+        @staticmethod
+        def apply_ip(s):
+            FakePlat.applied.append(s)
+            return True, "ok"
+    monkeypatch.setattr(plat, "current", lambda: FakePlat)
+    d = IpConfigDialog(ctrl)
+    d.open_for("Ethernet 10Gb")
+    assert d.rb_dhcp.isChecked() and d.ip.text() == "192.168.14.112" and d.mask.text() == "255.255.255.0"
+    assert "DHCP" in d.current.text()
+    d.rb_static.setChecked(True)
+    d.rb_dns_static.setChecked(True)
+    d.ip.setText("192.168.14.300")
+    assert not d.btn_apply.isEnabled()
+    d.ip.setText("192.168.14.112")
+    assert d.btn_apply.isEnabled()
+    s = d.settings()
+    assert (s.dhcp, s.ip, s.prefix, s.gateway, s.dns_list) == (False, "192.168.14.112", 24, "192.168.14.1",
+                                                              ["192.168.14.2", "192.168.14.3"])
+    results = []
+    ctrl.apply_ip(s, results.append)
+    pump(0.5)
+    assert results == [(True, "ok")] and FakePlat.applied[0].ip == "192.168.14.112"
+    # profil
+    monkeypatch.setattr("netmonitor.gui.ipconfig_dialog.QInputDialog.getText", lambda *a, **k: ("Kancelář", True))
+    d._save_profile()
+    assert ctrl.cfg.network.ip_profiles[0]["name"] == "Kancelář"
+    d.close()

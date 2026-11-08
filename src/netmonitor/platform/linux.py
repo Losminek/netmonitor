@@ -235,3 +235,50 @@ def set_autostart(enabled: bool, command: list[str]) -> None:
         "X-GNOME-Autostart-enabled=true\nX-GNOME-Autostart-Delay=5\nTerminal=false\n",
         encoding="utf-8",
     )
+
+
+# --- nastavení IP adresy přes NetworkManager (nmcli) ---------------------------
+
+def _nm_connection(iface: str) -> str | None:
+    out = run_cmd(["nmcli", "-g", "GENERAL.CONNECTION", "device", "show", iface], timeout=3)
+    conn = (out or "").strip().replace("\\:", ":")
+    return conn or None
+
+
+def dhcp_enabled(iface: str) -> bool | None:
+    conn = _nm_connection(iface)
+    if not conn:
+        return None
+    out = run_cmd(["nmcli", "-g", "ipv4.method", "connection", "show", conn], timeout=3)
+    m = (out or "").strip()
+    return {"auto": True, "manual": False}.get(m)
+
+
+def _run(args: list[str], timeout: float = 30) -> tuple[int, str]:
+    import subprocess
+    try:
+        p = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, check=False,
+                           env=dict(os.environ, LC_ALL="C", LANG="C"))
+        return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace").strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+
+
+def apply_ip(s) -> tuple[bool, str]:
+    import shutil
+    from ..core.ipconfig import nmcli_modify_args
+    if not shutil.which("nmcli"):
+        return False, "NetworkManager (nmcli) není k dispozici – IP nastavte nástroji vaší distribuce."
+    conn = _nm_connection(s.iface)
+    if not conn:
+        return False, f"Rozhraní {s.iface} není spravované NetworkManagerem (žádné aktivní připojení)."
+    log = []
+    for args in nmcli_modify_args(s, conn):
+        code, out = _run(args)
+        if code != 0 and ("not authorized" in out.lower() or "insufficient privileges" in out.lower()) \
+                and shutil.which("pkexec"):
+            code, out = _run(["pkexec"] + args, timeout=120)
+        log.append(f"> {' '.join(args)}\n{out}\n[exit {code}]")
+        if code != 0:
+            return False, "\n".join(log)
+    return True, "\n".join(log)

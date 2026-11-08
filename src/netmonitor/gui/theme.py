@@ -229,8 +229,16 @@ QPushButton:disabled { color: #5d7a93; border-color: #1c3a55; }
 QPushButton[accent="true"] { background: #0f6f8f; border-color: #22d3ff; }
 QPushButton:checked { background: #0f6f8f; border-color: #22d3ff; }
 QCheckBox, QRadioButton { color: #dbeeff; spacing: 8px; }
-QTableWidget, QTableView, QListWidget { background: #081426; alternate-background-color: #0c1d35; color: #eaf6ff;
+QTableWidget, QTableView, QListWidget, QTreeWidget, QTreeView { background: #081426; alternate-background-color: #0c1d35; color: #eaf6ff;
     gridline-color: #173a5a; border: 1px solid #1f4d73; border-radius: 4px; selection-background-color: #155a88; }
+QTreeView::item { padding: 3px 2px; }
+QTreeView::item:selected { background: #155a88; color: #ffffff; }
+QTreeView::item:hover { background: #10304f; }
+QRadioButton::indicator { width: 12px; height: 12px; border-radius: 8px; border: 2px solid #3a7bb0; background: #091628; }
+QRadioButton::indicator:checked { border-color: #22d3ff;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+                                stop:0 #22d3ff, stop:0.45 #22d3ff, stop:0.55 #091628, stop:1 #091628); }
+QRadioButton::indicator:disabled { border-color: #1c3a55; }
 QHeaderView::section { background: #10304f; color: #9fd8ff; border: none; border-right: 1px solid #1a4468;
     padding: 5px; }
 QSlider::groove:horizontal { height: 4px; background: #1d4467; border-radius: 2px; }

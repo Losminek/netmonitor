@@ -19,7 +19,8 @@ from .ping_panel import fmt_rtt
 
 RANGES = [("1 hodina", 3600, 0), ("24 hodin", 86400, 300), ("7 dní", 7 * 86400, 3600), ("30 dní", 30 * 86400, 4 * 3600)]
 EVENT_LABELS = {"down": "Výpadek", "up": "Obnovení", "wan_change": "Změna WAN IP", "internet_down": "Výpadek internetu",
-                "internet_up": "Internet obnoven", "high_latency": "Vysoká latence"}
+                "internet_up": "Internet obnoven", "high_latency": "Vysoká latence",
+                "ip_config": "Změna nastavení IP"}
 
 
 class Chart(QWidget):
@@ -219,7 +220,7 @@ class HistoryDialog(QDialog):
         cur = self.combo.currentData()
         self.combo.blockSignals(True)
         self.combo.clear()
-        for t in self.ctrl.cfg.ping.targets:
+        for t in self.ctrl.cfg.real_targets():
             self.combo.addItem(f"{t.name}  ({t.host})", t.id)
         if cur:
             i = self.combo.findData(cur)
@@ -305,7 +306,7 @@ class HistoryDialog(QDialog):
         self.events.resizeColumnToContents(1)
 
     def _names(self) -> dict[str, str]:
-        return {t.id: t.name for t in self.ctrl.cfg.ping.targets}
+        return {t.id: t.name for t in self.ctrl.cfg.real_targets()}
 
     def _export_samples(self) -> None:
         fn, _ = QFileDialog.getSaveFileName(self, "Export měření",

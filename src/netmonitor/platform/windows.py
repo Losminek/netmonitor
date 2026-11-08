@@ -152,6 +152,7 @@ def adapter_details() -> dict[str, dict]:
                 "gateways": _walk(a.FirstGatewayAddress),
                 "speed_mbps": (speed // 1_000_000) or None,
                 "metric": a.Ipv4Metric,
+                "dhcp": bool(a.Flags & IP_ADAPTER_DHCP_ENABLED),
                 "if_index": a.IfIndex,
             }
             p = a.Next
@@ -292,3 +293,84 @@ def send_to_bottom(hwnd: int) -> None:
                                           SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
     except Exception:  # noqa: BLE001
         log.debug("SetWindowPos selhalo", exc_info=True)
+
+
+# --- nastavení IP adresy (vyžaduje práva správce – UAC) ----------------------
+
+IP_ADAPTER_DHCP_ENABLED = 0x4
+ERROR_CANCELLED = 1223
+
+
+def dhcp_enabled(iface: str) -> bool | None:
+    d = adapter_details().get(iface)
+    return None if d is None else d.get("dhcp")
+
+
+def _shellexecute_struct():
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        # DWORD/ULONG jsou na Windows 32bitové – c_uint32 zaručí správné rozložení (sizeof = 112 na x64)
+        _fields_ = [("cbSize", ctypes.c_uint32), ("fMask", ctypes.c_uint32), ("hwnd", wintypes.HWND),
+                    ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+                    ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE),
+                    ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+                    ("dwHotKey", ctypes.c_uint32), ("hIconOrMonitor", wintypes.HANDLE),
+                    ("hProcess", wintypes.HANDLE)]
+    return SHELLEXECUTEINFOW
+
+
+def run_elevated_powershell(script: str, timeout_s: float = 90.0) -> tuple[int | None, str]:
+    """Spustí PowerShell se zvýšenými právy (UAC dotaz). Vrací (exit kód | None při zrušení, chyba).
+
+    Skript se předává jako -EncodedCommand (UTF-16LE base64) – nic spustitelného se neukládá na disk,
+    takže ho nelze mezi zápisem a spuštěním podvrhnout.
+    """
+    import base64
+    from ctypes import wintypes
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    SEI = _shellexecute_struct()
+    info = SEI()
+    info.cbSize = ctypes.sizeof(SEI)
+    info.fMask = 0x40 | 0x100 | 0x400        # NOCLOSEPROCESS | NOASYNC | FLAG_NO_UI
+    info.lpVerb = "runas"
+    info.lpFile = "powershell.exe"
+    info.lpParameters = f"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand {enc}"
+    info.nShow = 0
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SEI)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        err = ctypes.get_last_error()
+        if err == ERROR_CANCELLED:
+            return None, "Zrušeno – změna vyžaduje potvrzení správce (UAC)."
+        return None, f"Spuštění se zvýšenými právy selhalo (chyba {err})."
+    try:
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        if kernel32.WaitForSingleObject(info.hProcess, int(timeout_s * 1000)) != 0:
+            return None, "Vypršel časový limit nastavení sítě."
+        code = wintypes.DWORD()
+        kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code))
+        return int(code.value), ""
+    finally:
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle(info.hProcess)
+
+
+def apply_ip(s) -> tuple[bool, str]:
+    from ..core.ipconfig import windows_script
+    from ..utils.paths import data_dir
+    d = data_dir() / "ipconfig"
+    d.mkdir(parents=True, exist_ok=True)
+    log_path = d / "last-apply.log"
+    log_path.unlink(missing_ok=True)
+    code, err = run_elevated_powershell(windows_script(s, str(log_path)))
+    try:
+        out = log_path.read_text(encoding="utf-8-sig", errors="replace").strip()
+    except OSError:
+        out = ""
+    if code is None:
+        return False, err
+    return code == 0, out or f"netsh skončil s kódem {code}"

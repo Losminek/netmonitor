@@ -11,6 +11,7 @@ EN: dict[str, str] = {
     "SÍŤOVÉ INFORMACE": "NETWORK INFO",
     "Nastavení…": "Settings…",
     "Historie…": "History…",
+    "Nastavit IP adresu…": "Set IP address…",
     "Režim zobrazení": "Display mode",
     "Na ploše (pod okny)": "On desktop (below windows)",
     "Vždy navrchu": "Always on top",

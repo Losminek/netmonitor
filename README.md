@@ -51,6 +51,11 @@ pytest            # Linux bez displeje: QT_QPA_PLATFORM=offscreen pytest
 
 - **Levé tlačítko + tah** – přesun (není-li pozice uzamčena)
 - **Klik na řádek cíle** – detail s grafem (1 h / 24 h / 7 d / 30 d), statistikami a výpadky
+- **Klik na blok síťové karty** (adaptér, LAN IP, brána, DNS) – nastavení IP adresy: DHCP / pevná IP, maska,
+  brána, DNS, uložené profily. Vyžaduje práva správce (Windows: dotaz UAC; Linux: NetworkManager/polkit;
+  macOS: heslo správce). Před použitím se ověří, zda zadaná IP v síti už neodpovídá (obsazená adresa).
+- **Nastavení → Ping cíle** – sekce (např. DNS, DOMÉNY, ZAŘÍZENÍ), řazení přetažením myší nebo šipkami ▲▼,
+  nový cíl se vkládá za vybraný řádek
 - **Pravé tlačítko** – menu: Nastavení, Historie, režim (Na ploše / Vždy navrchu), zámek, click-through,
   průhlednost, velikost, skrytí do oznamovací oblasti, ukončení
 - **Úchyt vpravo dole** – změna velikosti

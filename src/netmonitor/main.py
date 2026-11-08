@@ -52,7 +52,7 @@ def diagnose(cfg: cfgmod.AppConfig) -> int:
     out["ping"] = {f"{t.name} ({t.host})": (lambda res: {"status": res.status.value,
                                                           "rtt_ms": round(res.rtt_ms, 2) if res.rtt_ms is not None else None,
                                                           "ip": res.address, "error": res.error})(
-        ping_host(t.host, t.timeout_s, pinger, r)) for t in cfg.ping.targets if t.enabled}
+        ping_host(t.host, t.timeout_s, pinger, r)) for t in cfg.real_targets() if t.enabled}
     if cfg.network.external_api:
         w = fetch_wan_ip()
         out["wan"] = {"ip": w.ip, "provider": w.provider, "error": w.error}
@@ -143,7 +143,15 @@ def main(argv=None) -> int:
         d.raise_()
         d.activateWindow()
 
+    def ipconfig(iface: str = ""):
+        from .gui.ipconfig_dialog import IpConfigDialog
+        d = dialogs.get("ipconfig")
+        if d is None:
+            d = dialogs["ipconfig"] = IpConfigDialog(ctrl)
+        d.open_for(iface or None)
+
     widget.open_settings.connect(settings)
+    widget.open_ipconfig.connect(ipconfig)
     widget.open_history.connect(history)
     widget.quit_requested.connect(app.quit)
     app.aboutToQuit.connect(ctrl.shutdown)

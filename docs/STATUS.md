@@ -1,4 +1,4 @@
-# Stav projektu – verze 1.0.1 (7. 11. 2026)
+# Stav projektu – verze 1.1.0 (8. 11. 2026)
 
 Vývoj a ověřování proběhlo v **Linuxu (Ubuntu 24.04, Python 3.13, PySide6 6.12)** bez fyzické Wi-Fi a bez
 skutečného displeje (Qt offscreen).
@@ -28,6 +28,8 @@ macOS: zatím ověřuje jen CI (GitHub Actions, macos-latest + macos-15-intel).
 | Detekce probuzení a změny sítě, automatické obnovení | ✔ |
 | Autostart: HKCU Run / XDG autostart / LaunchAgent | ✔ |
 | Single-instance zámek, atomický zápis konfigurace, záloha poškozené konfigurace | ✔ |
+| 1.1.0: sekce cílů (nadpisy ve widgetu i v nastavení), řazení přetažením / šipkami, vkládání za výběr | ✔ |
+| 1.1.0: nastavení IP síťové karty (DHCP / pevná IP / DNS, profily, kontrola obsazené IP) | ✔ – Windows: netsh přes UAC (-EncodedCommand), Linux: nmcli, macOS: networksetup |
 | Build: PyInstaller spec, Windows (ZIP + Inno Setup), Linux (tar.gz, .deb, AppImage), macOS (.app, DMG) | ✔ |
 
 ## Otestováno (automaticky, Linux)
@@ -52,6 +54,7 @@ z buildu, vykreslení widgetu (offscreen) a porovnání s návrhem.
 | **Běh na macOS** | nespuštěno; podpis/notarizace vyžaduje Apple Developer účet |
 | Skutečný kompozitor (průhlednost nad plochou, X11/Wayland chování) | ověřeno jen offscreen render |
 | Skutečná Wi-Fi (SSID/signál) | parsování otestováno na vzorcích výstupů |
+| Nastavení IP na skutečném Windows | generované netsh příkazy otestovány automaticky; reálné použití přes UAC ověří uživatel |
 | Uspání/probuzení v praxi | logika implementována, nebyla fyzicky vyzkoušena |
 | IPv6 ping na Windows přes nativní API | zatím přes `ping -6`; Icmp6SendEcho2 = budoucí rozšíření |
 | WAN IPv6 | připraveno (seznam poskytovatelů), neaktivní |

@@ -28,6 +28,7 @@ class InterfaceInfo:
     kind: str = "other"               # wifi | ethernet | vpn | loopback | other
     is_up: bool = False
     ipv4: tuple[str, ...] = ()
+    ipv4_masks: tuple[str, ...] = ()
     ipv6: tuple[str, ...] = ()
     mac: str = ""
     speed_mbps: float | None = None   # linková rychlost
@@ -87,10 +88,11 @@ def _psutil_interfaces() -> dict[str, dict]:
     res = {}
     for name, lst in addrs.items():
         v4 = tuple(a.address for a in lst if a.family == socket.AF_INET)
+        v4m = tuple((a.netmask or "") for a in lst if a.family == socket.AF_INET)
         v6 = tuple(a.address.split("%")[0] for a in lst if a.family == socket.AF_INET6)
         mac = next((a.address for a in lst if a.family == psutil.AF_LINK), "")
         st = stats.get(name)
-        res[name] = {"ipv4": v4, "ipv6": v6, "mac": mac, "is_up": bool(st and st.isup),
+        res[name] = {"ipv4": v4, "ipv4_masks": v4m, "ipv6": v6, "mac": mac, "is_up": bool(st and st.isup),
                      "speed": _sane_speed(st.speed if st else None)}
     return res
 
@@ -157,7 +159,7 @@ class NetworkInfoProvider:
                 speed = wifi["rate_mbps"]
         active = InterfaceInfo(
             name=name, display_name=det.get("display_name", name), kind=kind, is_up=d["is_up"],
-            ipv4=d["ipv4"], ipv6=tuple(a for a in d["ipv6"] if not a.lower().startswith("fe80")) or d["ipv6"],
+            ipv4=d["ipv4"], ipv4_masks=d.get("ipv4_masks", ()), ipv6=tuple(a for a in d["ipv6"] if not a.lower().startswith("fe80")) or d["ipv6"],
             mac=d["mac"], speed_mbps=speed, ssid=wifi.get("ssid"), signal_pct=wifi.get("signal_pct"),
             signal_dbm=wifi.get("signal_dbm"), wifi_note=wifi.get("note", ""), gateway=gateway,
             dns=tuple(dns), dns_note=dns_note,

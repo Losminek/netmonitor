@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter
 from PySide6.QtWidgets import QFrame, QScrollArea, QToolTip, QVBoxLayout, QWidget
 
@@ -178,6 +178,44 @@ class PingRow(QWidget):
         return "<br>".join(lines)
 
 
+class SectionRow(QWidget):
+    """Nadpis skupiny cílů (např. DNS, DOMÉNY) – jen popisek s neonovou linkou."""
+
+    def __init__(self, target: PingTarget, parent=None):
+        super().__init__(parent)
+        self.target = target
+        self._font = QFont()
+        self._neon = True
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+    def apply_style(self, cfg: AppConfig, scale: float) -> None:
+        self._neon = cfg.appearance.neon_effects
+        self._font = theme.font("body", 15 if not cfg.appearance.compact else 13, QFont.Weight.DemiBold, scale)
+        self._font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 112)
+        fh = QFontMetricsF(self._font).height()
+        self.setFixedHeight(int(fh * 1.55))
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(self._font)
+        fm = QFontMetricsF(self._font)
+        text = self.target.name.upper()
+        r = QRectF(self.rect())
+        x = r.left() + 6
+        baseline_y = r.bottom() - fm.descent() - r.height() * 0.12
+        p.setPen(theme.CYAN_TEXT)
+        tw = fm.horizontalAdvance(text)
+        avail = r.width() - x - 12
+        shown = fm.elidedText(text, Qt.TextElideMode.ElideRight, avail)
+        p.drawText(QPointF(x, baseline_y), shown)
+        line_y = baseline_y - fm.capHeight() / 2
+        x2 = x + min(tw, avail) + 12
+        if x2 < r.right() - 8:
+            theme.paint_neon_line(p, x2, r.right() - 4, line_y, self._neon, fade="right")
+
+
 class PingPanel(QWidget):
     target_clicked = Signal(str)
 
@@ -208,13 +246,15 @@ class PingPanel(QWidget):
         self.scroll.setWidget(self.container)
         lay.addWidget(self.scroll, 1)
         self.rows: dict[str, PingRow] = {}
+        self.sections: dict[str, SectionRow] = {}
+        self._order: list[str] = []
         self._cfg: AppConfig | None = None
         self._scale = 1.0
 
     def apply_style(self, cfg: AppConfig, scale: float) -> None:
         self._cfg, self._scale = cfg, scale
         self.header.set_style(scale, cfg.appearance.neon_effects)
-        for r in self.rows.values():
+        for r in list(self.rows.values()) + list(self.sections.values()):
             r.apply_style(cfg, scale)
         self._fit_rows()
 
@@ -229,36 +269,57 @@ class PingPanel(QWidget):
             return
         rows = list(self.rows.values())
         lo, hi = rows[0].height_range()
-        avail = self.scroll.viewport().height() - self.rows_layout.spacing() * (len(rows) - 1) - 2
+        n_all = len(rows) + len(self.sections)
+        sec_h = sum(sr.height() for sr in self.sections.values())
+        avail = self.scroll.viewport().height() - self.rows_layout.spacing() * (n_all - 1) - sec_h - 2
         h = max(lo, min(hi, int(avail / len(rows))))
         for r in rows:
             if r.height() != h:
                 r.setFixedHeight(h)
 
     def set_targets(self, cfg: AppConfig, snapshots: dict[str, TargetSnapshot]) -> None:
-        """Přestaví řádky jen pokud se změnil seznam/pořadí; jinak jen aktualizuje cíle."""
+        """Přestaví řádky jen pokud se změnil seznam/pořadí; jinak jen aktualizuje cíle a nadpisy."""
         self._cfg = cfg
-        targets = list(cfg.ping.targets)
-        ids = [t.id for t in targets]
-        if ids != list(self.rows):
-            for r in self.rows.values():
-                r.setParent(None)
-                r.deleteLater()
+        items = list(cfg.ping.targets)
+        ids = [t.id for t in items]
+        kinds_changed = any((t.id in self.sections) != t.is_section for t in items
+                            if t.id in self.sections or t.id in self.rows)
+        if ids != self._order or kinds_changed:
+            for w in list(self.rows.values()) + list(self.sections.values()):
+                w.setParent(None)
+                w.deleteLater()
             self.rows.clear()
-            for i, t in enumerate(targets):
-                row = PingRow(t, i)
-                row.clicked.connect(self.target_clicked)
-                row.apply_style(cfg, self._scale)
-                self.rows_layout.insertWidget(i, row)
-                self.rows[t.id] = row
+            self.sections.clear()
+            for pos, t in enumerate(items):
+                if t.is_section:
+                    w = SectionRow(t)
+                    self.sections[t.id] = w
+                else:
+                    w = PingRow(t, 0)
+                    w.clicked.connect(self.target_clicked)
+                    self.rows[t.id] = w
+                w.apply_style(cfg, self._scale)
+                self.rows_layout.insertWidget(pos, w)
+            self._order = ids
             self._fit_rows()
-        for i, t in enumerate(targets):
+        stripe = 0
+        for t in items:
+            if t.is_section:
+                sw = self.sections[t.id]
+                if sw.target.name != t.name:
+                    sw.target = t
+                    sw.update()
+                else:
+                    sw.target = t
+                stripe = 0          # pruhování začíná v každé sekci znovu
+                continue
             row = self.rows[t.id]
             changed = (row.target.host != t.host or row.target.name != t.name or row.target.enabled != t.enabled
-                       or row.target.icon != t.icon or row.target.show_rtt != t.show_rtt)
-            row.target, row.index = t, i
+                       or row.target.icon != t.icon or row.target.show_rtt != t.show_rtt or row.index != stripe)
+            row.target, row.index = t, stripe
+            stripe += 1
             snap = snapshots.get(t.id)
-            if changed and row.target.host != (snap.host if snap else t.host):
+            if snap is not None and snap.host != t.host:
                 snap = None
             row.set_snapshot(snap)
             if changed:

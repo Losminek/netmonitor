@@ -176,7 +176,7 @@ class MonitorEngine:
     # -- konfigurace --------------------------------------------------------
     def set_targets(self, targets: Iterable[PingTarget]) -> None:
         with self._lock:
-            new = {t.id: t for t in targets if t.enabled}
+            new = {t.id: t for t in targets if t.enabled and not getattr(t, 'is_section', False)}
             for tid in list(self._targets):
                 if tid not in new:
                     self._targets.pop(tid)

@@ -13,12 +13,15 @@ from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QSlider, QSpinBox,
-                               QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                               QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                               QWidget, QInputDialog)
 
 from .. import __version__
 from .. import platform as plat
 from ..core import config as cfgmod
-from ..core.config import ICON_CHOICES, MODE_DESKTOP, MODE_ONTOP, AppConfig, PingTarget, default_targets
+from ..core import target_order
+from ..core.config import (ICON_CHOICES, MODE_DESKTOP, MODE_ONTOP, AppConfig, PingTarget, default_targets,
+                           new_section)
 from ..utils.paths import config_dir, data_dir, log_dir
 from ..utils.validation import host_kind
 from . import theme
@@ -106,6 +109,132 @@ class TargetDialog(QDialog):
             self.err.setText("\n".join(errs))
             return
         self.accept()
+
+
+ROLE_SECTION = Qt.ItemDataRole.UserRole + 1
+
+
+class TargetTree(QTreeWidget):
+    """Strom cílů: sekce = uzly, cíle = listy. Přetahování myší (InternalMove).
+
+    Pravidla: cíl nemůže mít potomky; sekci nelze vložit do jiné sekce.
+    Po přetažení se odešle nové ploché pořadí ID a strom se znovu sestaví z konfigurace.
+    """
+    order_changed = Signal(list)
+
+    def __init__(self, cols: list[str]):
+        super().__init__()
+        self.setColumnCount(len(cols))
+        self.setHeaderLabels(cols)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setAlternatingRowColors(True)
+        self.setRootIsDecorated(True)
+        self.setIndentation(18)
+        self.setUniformRowHeights(True)
+        hh = self.header()
+        hh.setStretchLastSection(False)
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.filling = False
+        self.select_id: str | None = None
+
+    def fill(self, targets: list[PingTarget], selected: str | None = None) -> None:
+        self.filling = True
+        self.blockSignals(True)
+        want = self.select_id or selected
+        self.select_id = None
+        try:
+            self.clear()
+            parent = None
+            sel_item = None
+            bold = self.font()
+            bold.setBold(True)
+            for t in targets:
+                it = QTreeWidgetItem()
+                it.setData(0, Qt.ItemDataRole.UserRole, t.id)
+                if t.is_section:
+                    it.setData(0, ROLE_SECTION, True)
+                    it.setText(0, t.name.upper())
+                    it.setFont(0, bold)
+                    it.setForeground(0, QColor("#38d9ff"))
+                    it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
+                                Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
+                    self.addTopLevelItem(it)
+                    it.setFirstColumnSpanned(True)
+                    parent = it
+                else:
+                    it.setData(0, ROLE_SECTION, False)
+                    for c, val in enumerate([t.name, t.host, f"{t.interval_s:g} s", f"{t.timeout_s:g} s",
+                                             str(t.retries), "ms" if t.show_rtt else "OK"]):
+                        it.setText(c, val)
+                    it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
+                                Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsDragEnabled)
+                    it.setCheckState(0, Qt.CheckState.Checked if t.enabled else Qt.CheckState.Unchecked)
+                    if not t.enabled:
+                        for c in range(self.columnCount()):
+                            it.setForeground(c, QColor("#6a86a0"))
+                    if parent is None:
+                        self.addTopLevelItem(it)
+                    else:
+                        parent.addChild(it)
+                if t.id == want:
+                    sel_item = it
+            self.expandAll()
+            if sel_item is not None:
+                self.setCurrentItem(sel_item)
+                self.scrollToItem(sel_item)
+        finally:
+            self.blockSignals(False)
+            self.filling = False
+
+    def selected_id(self) -> str | None:
+        it = self.currentItem()
+        if it is None or not it.isSelected():
+            return None
+        return it.data(0, Qt.ItemDataRole.UserRole)
+
+    def flat_ids(self) -> list[str]:
+        ids = []
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            ids.append(top.data(0, Qt.ItemDataRole.UserRole))
+            for j in range(top.childCount()):
+                ids.append(top.child(j).data(0, Qt.ItemDataRole.UserRole))
+        return ids
+
+    def _drop_parent(self, e):
+        """Rodič, do kterého by položka po upuštění patřila (None = nejvyšší úroveň)."""
+        target = self.itemAt(e.position().toPoint())
+        if target is None:
+            return None
+        pos = self.dropIndicatorPosition()
+        if pos == QAbstractItemView.DropIndicatorPosition.OnItem:
+            return target
+        return target.parent()
+
+    def dragMoveEvent(self, e):
+        super().dragMoveEvent(e)
+        dragged = self.currentItem()
+        if dragged is not None and dragged.data(0, ROLE_SECTION) and self._drop_parent(e) is not None:
+            e.ignore()          # sekce nesmí do sekce
+
+    def dropEvent(self, e):
+        dragged = self.currentItem()
+        dragged_id = dragged.data(0, Qt.ItemDataRole.UserRole) if dragged else None
+        if dragged is not None and dragged.data(0, ROLE_SECTION) and self._drop_parent(e) is not None:
+            e.ignore()
+            return
+        super().dropEvent(e)
+        self.select_id = dragged_id
+        self.order_changed.emit(self.flat_ids())
 
 
 class SettingsDialog(QDialog):
@@ -407,30 +536,25 @@ class SettingsDialog(QDialog):
             self._apply(lambda c: (setattr(c.network, "adapter_name", name), setattr(c.network, "adapter_auto", False)))
 
     # ------------------------------------------------------------------ Ping cíle
-    COLS = ["Aktivní", "Název", "IP / doména", "Interval", "Timeout", "Opak.", "Zobrazení"]
+    COLS = ["Název", "IP / doména", "Interval", "Timeout", "Opak.", "Zobrazení"]
 
     def _tab_targets(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        self.table = QTableWidget(0, len(self.COLS))
-        self.table.setHorizontalHeaderLabels(self.COLS)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        hh = self.table.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table = TargetTree(self.COLS)
         self.table.itemChanged.connect(self._table_item_changed)
-        self.table.cellDoubleClicked.connect(lambda r, _c: self._edit_target())
+        self.table.itemDoubleClicked.connect(lambda _it, _c: self._edit_target())
+        self.table.order_changed.connect(self._order_from_tree)
         v.addWidget(self.table, 1)
         row1 = QHBoxLayout()
-        for label, fn in (("Přidat", self._add_target), ("Upravit", self._edit_target), ("Smazat", self._del_target),
-                          ("▲ Nahoru", lambda: self._move(-1)), ("▼ Dolů", lambda: self._move(1)),
+        for label, fn in (("Přidat cíl", self._add_target), ("Přidat sekci", self._add_section),
+                          ("Upravit", self._edit_target), ("Smazat", self._del_target),
+                          ("▲", lambda: self._move(-1)), ("▼", lambda: self._move(1)),
                           ("Testovat nyní", self._test_target), ("Graf…", self._graph_target)):
             b = QPushButton(label)
+            if label in ("▲", "▼"):
+                b.setFixedWidth(40)
+                b.setToolTip("Posunout nahoru" if label == "▲" else "Posunout dolů")
             b.clicked.connect(fn)
             row1.addWidget(b)
         v.addLayout(row1)
@@ -442,43 +566,25 @@ class SettingsDialog(QDialog):
             row2.addWidget(b)
         row2.addStretch(1)
         v.addLayout(row2)
-        v.addWidget(hint("Dvojklik = úprava. Stejná IP adresa u více zařízení je povolená – záznamy se neslučují. "
-                         "Interval 1–60 s, výpadek se vyhlásí po zadaném počtu po sobě jdoucích selhání."))
+        v.addWidget(hint("Pořadí měníte přetažením myší (i mezi sekcemi) nebo šipkami ▲▼. Sekce se přesouvá celá "
+                         "i se svými cíli. Nový cíl se vloží za vybraný řádek. Dvojklik = úprava, zaškrtávátko = "
+                         "zapnout/vypnout. Stejná IP adresa u více zařízení je povolená."))
         return w
 
     def _fill_table(self) -> None:
-        self.table.blockSignals(True)
         sel = self._selected_id()
-        self.table.setRowCount(0)
-        for t in self.ctrl.cfg.ping.targets:
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            chk = QTableWidgetItem()
-            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            chk.setCheckState(Qt.CheckState.Checked if t.enabled else Qt.CheckState.Unchecked)
-            chk.setData(Qt.ItemDataRole.UserRole, t.id)
-            self.table.setItem(r, 0, chk)
-            for c, val in enumerate([t.name, t.host, f"{t.interval_s:g} s", f"{t.timeout_s:g} s", str(t.retries),
-                                     "ms" if t.show_rtt else "OK"], start=1):
-                it = QTableWidgetItem(val)
-                it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-                self.table.setItem(r, c, it)
-            if t.id == sel:
-                self.table.selectRow(r)
-        self.table.blockSignals(False)
+        self.table.fill(self.ctrl.cfg.ping.targets, sel)
 
     def _selected_id(self) -> str | None:
-        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
-        if not rows:
-            return None
-        it = self.table.item(rows[0].row(), 0)
-        return it.data(Qt.ItemDataRole.UserRole) if it else None
+        return self.table.selected_id()
 
-    def _table_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() != 0 or self._loading:
+    def _table_item_changed(self, item, column: int) -> None:
+        if column != 0 or self._loading or self.table.filling:
             return
-        tid = item.data(Qt.ItemDataRole.UserRole)
-        on = item.checkState() == Qt.CheckState.Checked
+        tid = item.data(0, Qt.ItemDataRole.UserRole)
+        if not tid or item.data(0, ROLE_SECTION):
+            return
+        on = item.checkState(0) == Qt.CheckState.Checked
 
         def fn(c: AppConfig):
             t = c.target_by_id(tid)
@@ -486,17 +592,42 @@ class SettingsDialog(QDialog):
                 t.enabled = on
         self._apply(fn)
 
+    def _order_from_tree(self, ids: list) -> None:
+        self._apply(lambda c: setattr(c.ping, "targets", target_order.reorder(c.ping.targets, ids)))
+        self._fill_table()
+
     def _add_target(self) -> None:
         d = TargetDialog(None, self)
         if d.exec():
             t = d.result_target()
-            self._apply(lambda c: c.ping.targets.append(t))
+            anchor = self._selected_id()
+            self._apply(lambda c: setattr(c.ping, "targets", target_order.insert_target(c.ping.targets, t, anchor)))
+            self.table.select_id = t.id
             self._fill_table()
+
+    def _add_section(self) -> None:
+        name, ok = QInputDialog.getText(self, "Přidat sekci", "Název sekce (např. DNS, DOMÉNY, ZAŘÍZENÍ):")
+        if ok and name.strip():
+            sec = new_section(name)
+            self._apply(lambda c: c.ping.targets.append(sec))
+            self.table.select_id = sec.id
+            self._fill_table()
+            self.status.setText("Sekce přidána na konec – přetáhněte do ní cíle myší.")
 
     def _edit_target(self) -> None:
         tid = self._selected_id()
         t = self.ctrl.cfg.target_by_id(tid) if tid else None
         if not t:
+            return
+        if t.is_section:
+            name, ok = QInputDialog.getText(self, "Přejmenovat sekci", "Název sekce:", text=t.name)
+            if ok and name.strip():
+                def fn(c: AppConfig):
+                    x = c.target_by_id(tid)
+                    if x:
+                        x.name = name.strip()
+                self._apply(fn)
+                self._fill_table()
             return
         d = TargetDialog(t, self)
         if d.exec():
@@ -510,28 +641,29 @@ class SettingsDialog(QDialog):
         t = self.ctrl.cfg.target_by_id(tid) if tid else None
         if not t:
             return
-        if QMessageBox.question(self, "Smazat cíl", f"Smazat '{t.name}' ({t.host})?\nHistorie v databázi zůstane.") \
-                != QMessageBox.StandardButton.Yes:
+        if t.is_section:
+            msg = f"Smazat sekci '{t.name}'?\nCíle v ní zůstanou zachované (připojí se k předchozí sekci)."
+        else:
+            msg = f"Smazat '{t.name}' ({t.host})?\nHistorie v databázi zůstane."
+        if QMessageBox.question(self, "Smazat", msg) != QMessageBox.StandardButton.Yes:
             return
-        self._apply(lambda c: setattr(c.ping, "targets", [x for x in c.ping.targets if x.id != tid]))
+        self._apply(lambda c: setattr(c.ping, "targets", target_order.remove(c.ping.targets, tid)))
         self._fill_table()
 
     def _move(self, d: int) -> None:
         tid = self._selected_id()
         if not tid:
             return
-
-        def fn(c: AppConfig):
-            ts = c.ping.targets
-            i = next(i for i, x in enumerate(ts) if x.id == tid)
-            j = i + d
-            if 0 <= j < len(ts):
-                ts[i], ts[j] = ts[j], ts[i]
-        self._apply(fn)
+        self._apply(lambda c: setattr(c.ping, "targets", target_order.move(c.ping.targets, tid, d)))
+        self.table.select_id = tid
         self._fill_table()
 
     def _test_target(self) -> None:
         tid = self._selected_id()
+        t = self.ctrl.cfg.target_by_id(tid) if tid else None
+        if t and t.is_section:
+            self.status.setText("Vyberte cíl, ne sekci.")
+            return
         if tid and self.ctrl.engine.test_now(tid):
             self.status.setText("Test odeslán – výsledek se zobrazí ve widgetu.")
         elif tid:
@@ -539,7 +671,8 @@ class SettingsDialog(QDialog):
 
     def _graph_target(self) -> None:
         tid = self._selected_id()
-        if tid:
+        t = self.ctrl.cfg.target_by_id(tid) if tid else None
+        if t and not t.is_section:
             self.history_requested.emit(tid)
 
     def _export(self) -> None:

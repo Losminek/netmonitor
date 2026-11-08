@@ -103,6 +103,7 @@ class NetworkPanel(QWidget):
         self._all_rows = [self.wan, self.lan, self.isp, self.adapter, self.lanip, self.speed, self.gw, self.ssid,
                           self.ipv6, *self.dns_rows]
         self.lan.value.set_value("UNKNOWN", theme.MUTED)
+        self._mark_clickable()
 
     def _grid(self) -> QGridLayout:
         g = QGridLayout()
@@ -129,6 +130,21 @@ class NetworkPanel(QWidget):
         self._align_columns()
         for s in (self.sep1, self.sep2, self.sep3):
             s.set_style(scale, cfg.appearance.neon_effects)
+
+    def adapter_area_contains(self, global_pos) -> bool:
+        """Blok síťové karty (adaptér, LAN IP, brána, rychlost, SSID, DNS) – klik otevře nastavení IP."""
+        p = self.mapFromGlobal(global_pos)
+        if not self.rect().contains(p):
+            return False
+        return self.sep1.geometry().bottom() <= p.y() <= self.sep3.geometry().top()
+
+    def _mark_clickable(self) -> None:
+        tip = "Klikněte pro nastavení IP adresy této síťové karty"
+        for r in (self.adapter, self.lanip, self.speed, self.gw, self.ssid, self.ipv6, *self.dns_rows):
+            for w in r.widgets():
+                w.setCursor(Qt.CursorShape.PointingHandCursor)
+            for w in (r.label, r.colon):
+                w.setToolTip(tip)
 
     def _align_columns(self) -> None:
         """Pevné šířky sloupců popisků => dvojtečky jsou zarovnané pod sebou (jako v návrhu)."""

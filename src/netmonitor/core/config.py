@@ -54,9 +54,20 @@ class PingTarget:
     show_rtt: bool = True       # False => zobrazí "OK" místo ms (jako ve schváleném návrhu)
     internet_probe: str = "auto"  # auto | yes | no – zda se cíl počítá do stavu internetu
     id: str = field(default_factory=new_id)
+    kind: str = "target"          # target | section (nadpis skupiny – nic se nepinguje)
+
+    @property
+    def is_section(self) -> bool:
+        return self.kind == "section"
 
     def normalized(self) -> "PingTarget":
         t = copy.copy(self)
+        t.kind = "section" if t.kind == "section" else "target"
+        if t.kind == "section":
+            t.name = str(t.name).strip()[:48] or "Sekce"
+            t.host = ""
+            t.id = str(t.id or new_id())
+            return t
         t.name = str(t.name).strip()[:64] or t.host
         t.host = str(t.host).strip()
         t.enabled = bool(t.enabled)
@@ -73,6 +84,8 @@ class PingTarget:
         errs = []
         if not self.name.strip():
             errs.append("Název nesmí být prázdný")
+        if self.is_section:
+            return errs
         if host_kind(self.host) == "invalid":
             errs.append(f"Neplatná IP adresa nebo doména: {self.host!r}")
         if not (1 <= self.interval_s <= 60):
@@ -139,6 +152,7 @@ class NetworkConfig:
     refresh_s: int = 5
     gateway_probe: bool = True
     linux_prefer_xwayland: bool = True   # na Waylandu spustit přes XWayland (pozice/režim okna fungují)
+    ip_profiles: list = field(default_factory=list)   # uložené profily nastavení IP (viz core/ipconfig.py)
 
 
 @dataclass
@@ -214,6 +228,8 @@ class AppConfig:
         n.refresh_s = int(_clamp(n.refresh_s, 2, 300, 5))
         n.isp_cache_hours = int(_clamp(n.isp_cache_hours, 1, 24 * 30, 24))
         n.isp_provider = n.isp_provider if n.isp_provider in ("ipinfo", "ripestat") else "ipinfo"
+        from .ipconfig import sanitize_profiles
+        n.ip_profiles = sanitize_profiles(n.ip_profiles)
         p = self.ping
         p.max_concurrent = int(_clamp(p.max_concurrent, 1, 128, 16))
         t = p.thresholds
@@ -234,6 +250,10 @@ class AppConfig:
     def target_by_id(self, tid: str) -> PingTarget | None:
         return next((t for t in self.ping.targets if t.id == tid), None)
 
+    def real_targets(self) -> list[PingTarget]:
+        """Jen skutečné cíle (bez nadpisů sekcí) – pro monitoring, historii a stav připojení."""
+        return [t for t in self.ping.targets if not t.is_section]
+
 
 def _load_dc(cls, data):
     obj = cls()
@@ -252,10 +272,14 @@ def targets_from_list(items: Any) -> list[PingTarget]:
         return out
     names = {f.name for f in fields(PingTarget)}
     for it in items:
-        if not isinstance(it, dict) or not it.get("host"):
+        if not isinstance(it, dict):
+            continue
+        is_section = it.get("kind") == "section"
+        if not is_section and not it.get("host"):
             continue
         kw = {k: v for k, v in it.items() if k in names}
-        kw.setdefault("name", it.get("host"))
+        kw.setdefault("name", it.get("host") or "Sekce")
+        kw.setdefault("host", "")
         t = PingTarget(**kw).normalized()
         if t.id in seen_ids:  # duplicitní ID -> nové, záznamy se NESLUČUJÍ
             t.id = new_id()
@@ -279,6 +303,10 @@ def default_targets() -> list[PingTarget]:
         ("Smart Box", "10.0.1.138", "box", False),
     ]
     return [PingTarget(name=n, host=h, icon=i, show_rtt=r) for n, h, i, r in spec]
+
+
+def new_section(name: str) -> PingTarget:
+    return PingTarget(name=name, host="", kind="section").normalized()
 
 
 def migrate_dict(data: dict) -> dict:

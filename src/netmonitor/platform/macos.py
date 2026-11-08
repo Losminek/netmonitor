@@ -83,3 +83,42 @@ def set_autostart(enabled: bool, command: list[str]) -> None:
     with open(LAUNCH_AGENT, "wb") as f:
         plistlib.dump({"Label": "eu.zelina.netmonitor", "ProgramArguments": command,
                        "RunAtLoad": True, "ProcessType": "Interactive"}, f)
+
+
+# --- nastavení IP adresy (networksetup, práva správce přes osascript) ---------
+
+def _service_for(iface: str) -> str | None:
+    out = run_cmd(["networksetup", "-listallhardwareports"], timeout=3) or ""
+    for port, dev in re.findall(r"Hardware Port:\s*(.+)\nDevice:\s*(\S+)", out):
+        if dev == iface:
+            return port.strip()
+    return None
+
+
+def dhcp_enabled(iface: str) -> bool | None:
+    svc = _service_for(iface)
+    if not svc:
+        return None
+    out = run_cmd(["networksetup", "-getinfo", svc], timeout=3) or ""
+    if "DHCP Configuration" in out:
+        return True
+    if "Manual Configuration" in out:
+        return False
+    return None
+
+
+def apply_ip(s) -> tuple[bool, str]:
+    import subprocess
+    from ..core.ipconfig import applescript_admin, networksetup_args
+    svc = _service_for(s.iface)
+    if not svc:
+        return False, f"Pro rozhraní {s.iface} nebyla nalezena síťová služba (networksetup)."
+    script = applescript_admin(networksetup_args(s, svc))
+    try:
+        p = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=120, check=False)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+    out = (p.stdout + p.stderr).decode("utf-8", "replace").strip()
+    if p.returncode != 0 and "-128" in out:
+        return False, "Zrušeno – změna vyžaduje heslo správce."
+    return p.returncode == 0, out or "Hotovo"

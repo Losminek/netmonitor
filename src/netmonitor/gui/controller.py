@@ -170,16 +170,41 @@ class Controller(QObject):
         self._run_bg("save-config", lambda: cfgmod.save_config(cfg, self.config_path))
 
     def _apply_targets(self) -> None:
-        targets = list(self.cfg.ping.targets)
+        targets = self.cfg.real_targets()
         gw = self.network.active.gateway if self.network and self.network.active else None
         if self.cfg.network.gateway_probe and gw:
             targets.append(PingTarget(name="Brána", host=gw, interval_s=5, timeout_s=1, retries=3, id=GATEWAY_ID))
         self.engine.set_targets(targets)
-        ids = {t.id for t in self.cfg.ping.targets}
+        ids = {t.id for t in self.cfg.real_targets()}
         self.snapshots = {k: v for k, v in self.snapshots.items() if k in ids}
-        self._run_bg("targets-db", lambda: self.history.upsert_targets(self.cfg.ping.targets))
+        self._run_bg("targets-db", lambda: self.history.upsert_targets(self.cfg.real_targets()))
         self.targets_changed.emit()
         self._eval_timer.start()
+
+    def apply_ip(self, settings, done: Callable[[tuple], None]) -> None:
+        """Použije nastavení IP na pozadí (UAC / polkit / heslo správce), pak obnoví síťové údaje."""
+        from .. import platform as plat
+
+        def job():
+            try:
+                return plat.current().apply_ip(settings)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Nastavení IP selhalo")
+                return False, str(e)
+
+        def finished(res):
+            ok, out = res
+            log.info("Nastavení IP (%s): %s", "OK" if ok else "CHYBA", settings.summary().replace("\n", "; "))
+            if ok:
+                self._db(lambda: self.history.add_event("ip_config", None, None,
+                                                        settings.summary().replace("\n", "; ")))
+                self.resolver.clear()
+                for delay in (1500, 5000, 12000):      # DHCP / změna adresy chvíli trvá
+                    QTimer.singleShot(delay, self.refresh_network)
+                QTimer.singleShot(6000, self.refresh_wan)
+                QTimer.singleShot(2000, self.engine.reschedule_all)
+            done(res)
+        self._run_bg("ip-apply", job, finished)
 
     def test_now(self, target_id: str) -> None:
         self.engine.test_now(target_id)
@@ -295,7 +320,7 @@ class Controller(QObject):
         net = self.network
         a = net.active if net else None
         ups, rtts, losses = [], [], []
-        for t in self.cfg.ping.targets:
+        for t in self.cfg.real_targets():
             if not t.enabled:
                 continue
             s = self.snapshots.get(t.id)

@@ -63,6 +63,7 @@ class ResizeGrip(QWidget):
 class MainWidget(QWidget):
     open_settings = Signal()
     open_history = Signal(str)
+    open_ipconfig = Signal(str)
     quit_requested = Signal()
     visibility_toggled = Signal(bool)
 
@@ -287,6 +288,10 @@ class MainWidget(QWidget):
             if row is not None:
                 self.open_history.emit(row.target.id)
                 return True
+            if self.net.adapter_area_contains(gp):
+                a = self.ctrl.network.active if self.ctrl.network else None
+                self.open_ipconfig.emit(a.name if a else "")
+                return True
         if t == QEvent.Type.MouseButtonDblClick and obj is self.title:
             self.open_settings.emit()
             return True
@@ -307,6 +312,8 @@ class MainWidget(QWidget):
             m.addSeparator()
         m.addAction(tr("Nastavení…"), self.open_settings.emit)
         m.addAction(tr("Historie…"), lambda: self.open_history.emit(""))
+        act_if = self.ctrl.network.active if self.ctrl.network else None
+        m.addAction(tr("Nastavit IP adresu…"), lambda: self.open_ipconfig.emit(act_if.name if act_if else ""))
         m.addSeparator()
         mode = m.addMenu(tr("Režim zobrazení"))
         grp = QActionGroup(mode)
