@@ -73,6 +73,16 @@ class AdapterConfiguration:
     dns: tuple[str, ...] | None = None
     dhcp: bool | None = None
     dns_dhcp: bool | None = None
+    ipv4: tuple[str, ...] = ()
+
+    @property
+    def apply_blockers(self) -> list[str]:
+        errors = []
+        if len(self.ipv4) > 1:
+            errors.append("karta má více IPv4 adres – změnu proveďte v nastavení systému")
+        if any(":" in server for server in self.dns or ()):
+            errors.append("Karta má IPv6 DNS – změnu proveďte v nastavení systému")
+        return errors
 
     @property
     def unknown(self) -> list[str]:
@@ -151,7 +161,7 @@ class NetworkInfoProvider:
                 parse_mask(mask)
             return AdapterConfiguration(iface, ips[0] if ips else "", mask,
                                         state.get("gateway"), state.get("dns"), state.get("dhcp"),
-                                        state.get("dns_dhcp"))
+                                        state.get("dns_dhcp"), ipv4=tuple(ips))
         except Exception:  # noqa: BLE001
             log.debug("Detaily IP karty nelze načíst", exc_info=True)
             return AdapterConfiguration(iface)

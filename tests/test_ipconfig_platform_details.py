@@ -64,7 +64,7 @@ def test_windows_reads_selected_adapter_and_independent_dns_mode(monkeypatch, dh
         OpenKey=open_key, HKEY_LOCAL_MACHINE=object(), QueryValueEx=lambda *a: (registry_dns, 1)))
     monkeypatch.setattr(windows, "adapter_details", lambda: {
         "other-test": {"guid": "{TEST-GUID}", "gateways": ["198.51.100.1"],
-                       "dns": ["192.0.2.53"], "dhcp": dhcp},
+                       "dns": ["192.0.2.53"], "dhcp": dhcp, "up": True, "ips": ["198.51.100.20"]},
         "active-test": {"gateways": ["192.0.2.1"], "dns": ["192.0.2.99"]}})
     state = windows.ip_config_details("other-test")
     assert state == {"gateway": "198.51.100.1", "dns": ("192.0.2.53",),
@@ -76,7 +76,7 @@ def test_windows_unavailable_data_are_unknown(monkeypatch):
     """Regrese B11: fallback bez režimu DNS musí editor zablokovat."""
     monkeypatch.setattr(windows, "adapter_details", lambda: {"other-test": {"dns": [], "gateways": []}})
     state = windows.ip_config_details("other-test")
-    assert state == {"dhcp": None, "dns": (), "gateway": ""}
+    assert state == {"dhcp": None, "dns": None, "gateway": None}
     assert "dns_dhcp" not in state
 
 
@@ -112,3 +112,36 @@ def test_macos_global_dns_fallback_is_not_configuration_of_selected_adapter(monk
     state = macos.ip_config_details("other-test")
     assert state["gateway"] == "" and state["dns_dhcp"] is True
     assert "dns" not in state
+
+
+@pytest.mark.parametrize("up,ips", [(False, ["198.51.100.20"]), (False, []),
+                                   (True, []), (True, ["2001:db8::20"])])
+def test_windows_disconnected_or_without_ipv4_does_not_claim_empty_gateway_dns(monkeypatch, up, ips):
+    """Regrese review 2: prázdná runtime data odpojené Windows karty jsou nezjištěná."""
+    monkeypatch.setattr(windows, "adapter_details", lambda: {
+        "other-test": {"up": up, "ips": ips, "gateways": [], "dns": [], "dhcp": True}})
+    state = windows.ip_config_details("other-test")
+    assert state.get("gateway") is None and state.get("dns") is None
+
+
+def test_macos_null_router_and_ipv6_dns_are_preserved(monkeypatch):
+    """Regrese review 2: (null) není brána a IPv6 DNS nesmí zmizet ze stavu karty."""
+    monkeypatch.setattr(macos, "_service_for", lambda _: "Test Ethernet")
+    monkeypatch.setattr(macos, "run_cmd", lambda args, **k:
+                        "Manual Configuration\nRouter: (null)\n" if "-getinfo" in args else
+                        "192.0.2.53\n2001:db8::53\n")
+    state = macos.ip_config_details("other-test")
+    assert state["gateway"] == ""
+    assert state["dns"] == ("192.0.2.53", "2001:db8::53")
+
+
+def test_macos_scoped_ipv6_dns_are_preserved(monkeypatch):
+    """Regrese review 2: i automatický scoped resolver musí zachovat IPv6 DNS."""
+    monkeypatch.setattr(macos, "_service_for", lambda _: "Test Ethernet")
+    monkeypatch.setattr(macos, "run_cmd", lambda args, **k:
+                        "DHCP Configuration\nRouter: none\n" if "-getinfo" in args else
+                        "There aren't any DNS Servers set on Test Ethernet." if "-getdnsservers" in args else
+                        "DNS configuration (for scoped queries)\nresolver #1\n"
+                        " nameserver[0] : 2001:db8::53\n if_index : 7 (other-test)\n")
+    state = macos.ip_config_details("other-test")
+    assert state["dns"] == ("2001:db8::53",)
