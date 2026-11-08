@@ -35,7 +35,7 @@ přiložte ho k hlášení chyby.
 | Windows: „Systém Windows ochránil váš počítač“ | Instalátor není podepsaný certifikátem; *Další informace → Přesto spustit*. Otisk SHA-256 souboru je v Releases. |
 | Traceroute nic neukazuje / „tracert nebyl nalezen“ | Windows: `C:\Windows\System32\tracert.exe`; Linux: `sudo apt install traceroute`. |
 | Wake-on-LAN zařízení neprobudí | WoL musí být zapnuté v BIOSu/UEFI i v ovladači karty; zařízení v jiné podsíti potřebuje „Broadcast pro WoL“ nebo předání broadcastu na routeru. |
-| Poškozená konfigurace | Automaticky se zazálohuje jako `config.broken.json` a použijí se výchozí hodnoty. |
+| Poškozená/nečitelná konfigurace nebo WAN cache | Původní soubor se odloží jako `config.json.corrupt-<čas>-<id>` / `wan_state.json.corrupt-<čas>-<id>` a zaloguje se varování. Použijí se výchozí hodnoty / prázdná cache. Pokud odložení selže, originál se zachová a jeho přepsání se zablokuje. Obnovu nastavení lze provést ze zachované zálohy po opravě JSONu. |
 
 ## Reset
 
