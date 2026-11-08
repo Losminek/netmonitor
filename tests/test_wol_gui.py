@@ -271,3 +271,167 @@ def test_wake_discovery_does_not_send_without_confirmation(ctrl, slow_lookup, mo
     no_packets.assert_not_called()
     assert question.call_count == (1 if change == "decline" else 0)
     assert not target.mac
+
+
+@pytest.fixture
+def scheduled_checks(monkeypatch):
+    """Řídí doručování jednotlivých kontrol bez skutečného čekání 15/30/60 sekund."""
+    callbacks = []
+    monkeypatch.setattr(tools, "QTimer", SimpleNamespace(singleShot=lambda delay, callback: callbacks.append(callback)))
+    return callbacks
+
+
+@pytest.mark.parametrize("visible", [False, True])
+@pytest.mark.parametrize("replies", [("ok:5", "timeout", "timeout"), ("timeout", "ok:5", "timeout")])
+def test_wake_keeps_success_and_notifies_when_hidden(ctrl, scheduled_checks, visible, replies):
+    """Regrese R2: pozdější timeout nepřepíše úspěch; skryté okno doručí výsledek do tray signálu."""
+    messages = []
+    ctrl.notification.connect(messages.append)
+    tools.wake(ctrl, ctrl.cfg.ping.targets[0])
+    dialog = tools._wol_dialogs[-1]
+    if not visible:
+        dialog.close()
+    for attempt, (callback, reply) in enumerate(zip(scheduled_checks, replies), 1):
+        ctrl.pinger.default = reply
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+    assert ctrl.pinger.calls == {HOST: 3}
+    assert "dostupný (5.0 ms)" in dialog.status.text()
+    assert "Cíl odpověděl při dřívějším ověření." in dialog.status.text()
+    assert "neodpovídá" not in dialog.status.text()
+    if visible:
+        assert not messages
+    else:
+        assert len(messages) == 3
+        assert messages[-1].message == dialog.status.text()
+        assert messages[-1].kind == "wol" and messages[-1].key == "wol:pc"
+        assert "Wake-on-LAN" in messages[-1].title
+
+
+@pytest.mark.parametrize("status, error, expected", [
+    (ping_engine.PingStatus.TIMEOUT, "", "vypršel časový limit"),
+    (ping_engine.PingStatus.HOST_UNREACHABLE, "", "host nedostupný"),
+    (ping_engine.PingStatus.NET_UNREACHABLE, "", "síť nedostupná"),
+    (ping_engine.PingStatus.DNS_ERROR, "", "doménu nelze přeložit"),
+    (ping_engine.PingStatus.ERROR, "", "chyba"),
+    (ping_engine.PingStatus.ERROR, "Vlastní popis chyby", "Vlastní popis chyby"),
+])
+def test_wake_uses_czech_error_descriptions(ctrl, status, error, expected):
+    """Regrese R3: stavový text používá ERR_DESC, podrobná chyba má přednost."""
+    dialog = tools.WolDialog(ctrl, ctrl.cfg.ping.targets[0])
+    tools._wol_dialogs.append(dialog)
+    messages = []
+    ctrl.notification.connect(messages.append)
+    dialog.pending = 1
+    dialog._checked(3, ping_engine.PingResult(status, error=error))
+    assert f"neodpovídá ({expected})" in dialog.status.text()
+    assert messages[-1].message == dialog.status.text()
+
+
+@pytest.mark.parametrize("state", ["enabled", "disabled", "removed", "host_changed"])
+def test_wake_refreshes_only_current_enabled_target(ctrl, monkeypatch, state):
+    """Regrese R4: po ověření se aktivní cíl obnoví v plánovači podle aktuální konfigurace."""
+    target = ctrl.cfg.ping.targets[0]
+    target.enabled = state != "enabled"     # změna enabled až po vytvoření okna
+    dialog = tools.WolDialog(ctrl, target)
+    tools._wol_dialogs.append(dialog)
+    target.enabled = state != "disabled"
+    if state == "removed":
+        ctrl.cfg.ping.targets.clear()
+    elif state == "host_changed":
+        target.host = "198.51.100.10"
+    test_now = Mock()
+    monkeypatch.setattr(ctrl, "test_now", test_now)
+    dialog.pending = 1
+    dialog._checked(3, ping_engine.PingResult(ping_engine.PingStatus.OK, rtt_ms=5))
+    if state == "enabled":
+        test_now.assert_called_once_with("pc")
+    else:
+        test_now.assert_not_called()
+
+
+def test_wake_reuses_completed_visible_window_and_resets_result(ctrl, scheduled_checks, no_packets):
+    """Regrese R6: další probuzení použije stejné viditelné okno a nepřevezme starý úspěch."""
+    target = ctrl.cfg.ping.targets[0]
+    tools.wake(ctrl, target)
+    dialog = tools._wol_dialogs[-1]
+    for attempt, callback in enumerate(list(scheduled_checks), 1):
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+    assert dialog.isVisible() and not dialog.busy()
+    assert "dostupný" in dialog.status.text()
+    count = len(tools._wol_dialogs)
+    target.name = "Přejmenovaný test PC"
+    target.mac = "02:00:00:00:00:02"
+    ctrl.pinger.default = "timeout"
+    tools.wake(ctrl, target)
+    assert len(tools._wol_dialogs) == count
+    assert tools._wol_dialogs[-1] is dialog
+    assert dialog.target.name == target.name
+    assert target.name in dialog.windowTitle()
+    assert dialog.pending == 3
+    assert no_packets.call_count == 2
+    no_packets.assert_called_with(target.mac, None, None, None)
+    for attempt, callback in enumerate(scheduled_checks[3:], 1):
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+    assert "neodpovídá" in dialog.status.text()
+    assert "Cíl odpověděl" not in dialog.status.text()
+
+
+@pytest.mark.parametrize("when", ["during_lookup", "during_question"])
+def test_wake_preserves_manually_entered_mac(ctrl, slow_lookup, monkeypatch, scheduled_checks, no_packets, when):
+    """Regrese R6: ruční MAC zadaná během ARP nebo potvrzovacího dialogu má přednost."""
+    target = ctrl.cfg.ping.targets[0]
+    target.mac = ""
+    manual_mac = "02:00:00:00:00:02"
+    entered, release, _ = slow_lookup
+
+    def enter_mac():
+        cfg = ctrl.cfg.copy()
+        cfg.ping.targets[0].mac = manual_mac
+        ctrl.update_config(cfg, save=False)
+
+    def question(*args):
+        enter_mac()
+        return QMessageBox.StandardButton.Yes
+
+    ask = Mock(side_effect=question)
+    monkeypatch.setattr(QMessageBox, "question", ask)
+    tools.wake(ctrl, target)
+    dialog = tools._wol_dialogs[-1]
+    wait_until(entered.is_set)
+    if when == "during_lookup":
+        enter_mac()
+    release.set()
+    wait_until(lambda: not dialog.detecting)
+    assert ctrl.cfg.target_by_id("pc").mac == manual_mac
+    no_packets.assert_called_once_with(manual_mac, None, None, None)
+    assert ask.call_count == (1 if when == "during_question" else 0)
+    for attempt, callback in enumerate(scheduled_checks, 1):
+        callback()
+        wait_until(lambda: dialog.pending == 3 - attempt)
+
+
+def test_wake_refreshes_widget_before_regular_interval(ctrl):
+    """Regrese R4: test_now po ověření změní skutečný widget bez čekání na 60s interval."""
+    from netmonitor.gui.main_widget import MainWidget
+
+    target = ctrl.cfg.ping.targets[0]
+    target.enabled = True
+    target.interval_s = 60
+    ctrl.pinger.default = "timeout"
+    widget = MainWidget(ctrl)
+    ctrl.engine.set_targets([target])
+    ctrl.engine.start()
+    try:
+        wait_until(lambda: widget.ping.rows["pc"]._value[0] == "TIMEOUT")
+        ctrl.pinger.default = "ok:9"
+        dialog = tools.WolDialog(ctrl, target)
+        tools._wol_dialogs.append(dialog)
+        dialog.pending = 1
+        dialog._checked(1, ping_engine.PingResult(ping_engine.PingStatus.OK, rtt_ms=9))
+        wait_until(lambda: widget.ping.rows["pc"]._value[0] == "9.0 ms")
+    finally:
+        ctrl.engine.stop()
+        widget.close()

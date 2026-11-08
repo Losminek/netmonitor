@@ -29,7 +29,11 @@ def test_magic_packet_and_broadcast():
 
 
 def test_send_builds_udp_datagrams(monkeypatch):
-    """Regrese: test WoL nesmí posílat skutečný broadcast ani při ověřování payloadu."""
+    """Regrese: náhrada test_send_reaches_udp_listener bez skutečného UDP provozu.
+
+    Původní test přes loopback poslouchal payload, ale wol.send současně posílal
+    broadcast 255.255.255.255 do LAN. Fake socket ověří payload i všechny cíle bez odeslání.
+    """
     packets = []
     options = []
     binds = []
