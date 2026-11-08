@@ -68,6 +68,22 @@ def test_empty_environment_and_no_screens():
     assert result["environment"]["WAYLAND_DISPLAY"] is False
 
 
+def test_nonfinite_screen_metrics_produce_valid_json():
+    """Regrese: Wayland při nedostupném monitoru vrací NaN DPI, které není platné JSON číslo."""
+    screen = Mock()
+    screen.geometry.return_value = QRect(0, 0, 0, 0)
+    screen.devicePixelRatio.return_value = float("inf")
+    screen.logicalDotsPerInch.return_value = float("nan")
+    screen.physicalDotsPerInch.return_value = float("nan")
+    screen.refreshRate.return_value = float("-inf")
+    result = diag.build_gui_diagnostics(qt_platform="wayland", qt_version="6.12.0", pyside_version="6.12.0",
+                                        environ={}, screens=[screen], tray_available=False, compositing="neznámo")
+    metrics = result["screens"][0]
+    for key in ("devicePixelRatio", "logicalDotsPerInch", "physicalDotsPerInch", "refreshRate"):
+        assert metrics[key] is None
+    assert json.loads(json.dumps(result, allow_nan=False)) == result
+
+
 def test_x11_selection_owners_for_all_x_screens(monkeypatch):
     app = Mock()
     app.platformName.return_value = "xcb"
