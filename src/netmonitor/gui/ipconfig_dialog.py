@@ -13,6 +13,7 @@ from ..core.network_info import AdapterConfiguration, InterfaceInfo
 from ..core.ping_engine import Resolver, ping_host
 from . import theme
 from .controller import Controller
+from .widgets import show_dialog
 
 DNS_PRESETS = [
     ("Vlastní…", None),
@@ -153,9 +154,7 @@ class IpConfigDialog(QDialog):
         else:
             self._fill_profiles()
             self._fill_adapters(iface)
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        show_dialog(self)
 
     def _interfaces(self) -> list[InterfaceInfo]:
         net = self.ctrl.network
