@@ -6,6 +6,6 @@ Comment=Widget s informacemi o síti a monitoringem dostupnosti
 Exec=NetMonitor
 Icon=netmonitor
 Terminal=false
-Categories=Network;Monitor;Utility;
+Categories=Network;Monitor;
 Keywords=ping;network;wan;dns;monitor;
 StartupNotify=false
