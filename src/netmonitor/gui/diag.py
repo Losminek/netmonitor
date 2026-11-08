@@ -10,7 +10,7 @@ from typing import Protocol
 
 import PySide6
 from PySide6.QtCore import QRect, qVersion
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication
 
 
 class _Screen(Protocol):
@@ -30,12 +30,11 @@ def _safe_environment(environ: Mapping[str, str]) -> dict:
     """Povolí jen diagnostické hodnoty; názvy monitorů a cesty se nekopírují."""
     session = environ.get("XDG_SESSION_TYPE", "")
     desktops = environ.get("XDG_CURRENT_DESKTOP", "").split(":")
-    known_desktops = {"gnome", "kde", "plasma", "xfce", "lxde", "lxqt", "mate", "cinnamon",
-                      "unity", "zorin", "ubuntu", "budgie", "pantheon", "sway", "hyprland", "cosmic"}
+    token = r"[A-Za-z0-9_-]{1,32}"
     out = {
-        "XDG_SESSION_TYPE": session if session in ("", "x11", "wayland", "tty") else "[redacted]",
-        "XDG_CURRENT_DESKTOP": ":".join(d if d.lower() in known_desktops or not d else "[redacted]"
-                                         for d in desktops),
+        "XDG_SESSION_TYPE": session if not session or re.fullmatch(token, session) else "[redacted]",
+        "XDG_CURRENT_DESKTOP": ":".join(d if re.fullmatch(token, d) else "[redacted]"
+                                         for d in desktops if d),
         "WAYLAND_DISPLAY": bool(environ.get("WAYLAND_DISPLAY")),
         "DISPLAY": bool(environ.get("DISPLAY")),
     }
@@ -46,14 +45,14 @@ def _safe_environment(environ: Mapping[str, str]) -> dict:
             out[key] = None
         elif key == "QT_SCREEN_SCALE_FACTORS":
             # Qt dovoluje i jméno-monitoru=faktor; do logu patří pouze faktory v původním pořadí.
-            factors = [part.rsplit("=", 1)[-1] for part in value.split(";")]
+            factors = [part.rsplit("=", 1)[-1] for part in value.split(";") if part]
             out[key] = ";".join(f if re.fullmatch(number, f) else "[redacted]" for f in factors)
         elif key == "QT_QPA_PLATFORM":
             plugins = {"xcb", "wayland", "wayland-egl", "wayland-brcm", "windows", "cocoa", "offscreen",
                        "minimal", "minimalegl", "eglfs", "linuxfb", "vnc", "vkkhrdisplay"}
             # Za dvojtečkou mohou být parametry obsahující cesty či adresy.
             out[key] = ";".join(p.split(":", 1)[0] if p.split(":", 1)[0] in plugins else "[redacted]"
-                                for p in value.split(";"))
+                                for p in value.split(";") if p)
         elif key == "QT_ENABLE_HIGHDPI_SCALING":
             out[key] = value if value in ("0", "1") else "[redacted]"
         else:
@@ -63,7 +62,8 @@ def _safe_environment(environ: Mapping[str, str]) -> dict:
 
 def build_gui_diagnostics(*, qt_platform: str, qt_version: str, pyside_version: str,
                           environ: Mapping[str, str], screens: Iterable[_Screen], tray_available: bool,
-                          compositing: dict[str, bool] | str) -> dict:
+                          compositing: dict[str, bool] | str, platform_selected_by_app: str | None = None,
+                          xcb_fallback: str | None = None) -> dict:
     """Čistý snímek předaných údajů; nečte procesní prostředí ani nemění nastavení Qt."""
     screen_info = []
     for screen in screens:
@@ -76,6 +76,7 @@ def build_gui_diagnostics(*, qt_platform: str, qt_version: str, pyside_version: 
             "refreshRate": _finite(screen.refreshRate()),
         })
     return {"qt_platform": qt_platform, "qt_version": qt_version, "pyside_version": pyside_version,
+            "platform_selected_by_app": platform_selected_by_app, "xcb_fallback": xcb_fallback,
             "environment": _safe_environment(environ), "screens": screen_info,
             "tray_available": tray_available, "compositing": compositing}
 
@@ -112,9 +113,11 @@ def _x11_compositing(app: QApplication) -> dict[str, bool] | str:
         return "neznámo"
 
 
-def collect_gui_diagnostics(app: QApplication) -> dict:
+def collect_gui_diagnostics(app: QApplication, *, tray_available: bool,
+                            platform_selected_by_app: str | None = None) -> dict:
     """Read-only sběr po vytvoření QApplication, společný pro start a CLI."""
     return build_gui_diagnostics(qt_platform=app.platformName(), qt_version=qVersion(),
                                  pyside_version=PySide6.__version__, environ=os.environ,
-                                 screens=app.screens(), tray_available=QSystemTrayIcon.isSystemTrayAvailable(),
-                                 compositing=_x11_compositing(app))
+                                 screens=app.screens(), tray_available=tray_available,
+                                 compositing=_x11_compositing(app), platform_selected_by_app=platform_selected_by_app,
+                                 xcb_fallback=app.property("xcb_fallback"))

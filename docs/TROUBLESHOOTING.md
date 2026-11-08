@@ -17,8 +17,10 @@ sekce `gui` obsahuje platformu Qt, verze, škálování, DPI, dostupnost tray a 
 (jinak „neznámo“); stejný blok se při běžném startu zapisuje na úrovni INFO do logu.
 Přepínač inicializuje Qt bez vynucení offscreen a bez síťových dotazů, zatímco samotné `--diagnose` zůstává bez Qt;
 kombinace `--diagnose --diagnose-gui` přidá GUI sekci k původní síťové diagnostice.
-GUI blok neuvádí adresy displejů ani jména monitorů, neznámé hodnoty prostředí a případné osobní části parametrů
+GUI blok neuvádí adresy displejů ani jména monitorů, neplatné hodnoty prostředí a případné osobní části parametrů
 anonymizuje; původní síťová část kombinovaného výpisu nadále obsahuje IP a údaje rozhraní.
+Na Linuxu bez `DISPLAY`, `WAYLAND_DISPLAY` a explicitního `QT_QPA_PLATFORM` skončí `--diagnose-gui` s kódem 2
+a chybou „bez grafické relace“; kombinace s `--diagnose` přesto vypíše síťovou část a chybu v sekci `gui`.
 
 ## 2. Logy
 
