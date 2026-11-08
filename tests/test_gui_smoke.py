@@ -281,3 +281,34 @@ def test_traceroute_window_survives_thread_end(ctrl, monkeypatch):
     pump(1.5)
     assert tools._trace_dialogs == [d] and d.table.rowCount() == 4 and not d.busy()
     d.close()
+
+
+@pytest.mark.parametrize("fallback", [None, "cursor", "other"])
+def test_platform_notice_after_xcb_fallback(ctrl, qapp, monkeypatch, fallback):
+    """Regrese 1.0–1.3.3: po selhání XWaylandu má notice nabídnout instalaci knihovny."""
+    from PySide6.QtGui import QGuiApplication
+    from netmonitor.gui.main_widget import MainWidget
+
+    monkeypatch.setattr(QGuiApplication, "platformName", lambda: "wayland")
+    previous = qapp.property("xcb_fallback")
+    qapp.setProperty("xcb_fallback", fallback)
+    w = None
+    try:
+        w = MainWidget(ctrl)
+        if fallback == "cursor":
+            assert "chybí knihovna libxcb-cursor0" in w.platform_notice
+            assert "Debian/Ubuntu: sudo apt install libxcb-cursor0)" in w.platform_notice
+            assert "libxkbcommon-x11-0" not in w.platform_notice
+            assert "zapněte" not in w.platform_notice
+        elif fallback == "other":
+            assert "chybí knihovny xcb" in w.platform_notice
+            assert "Debian/Ubuntu: sudo apt install libxcb-cursor0 libxkbcommon-x11-0)" in w.platform_notice
+            assert "zapněte" not in w.platform_notice
+        else:
+            assert "zapněte" in w.platform_notice
+            assert "libxcb-cursor0" not in w.platform_notice
+        assert "`" not in w.platform_notice
+    finally:
+        if w is not None:
+            w.close()
+        qapp.setProperty("xcb_fallback", previous)

@@ -8,11 +8,13 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import logging
 import os
 import signal
 import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from . import APP_NAME, __version__
@@ -21,6 +23,35 @@ from .utils.logging_setup import setup_logging
 from .utils.paths import data_dir, ensure_dirs
 
 log = logging.getLogger("netmonitor")
+
+
+def xcb_available() -> bool:
+    """Před startem Qt ověří načtení knihovny vyžadované pluginem xcb."""
+    try:
+        ctypes.CDLL("libxcb-cursor.so.0")
+    except OSError:
+        return False
+    return True
+
+
+def select_qt_platform(env: Mapping[str, str], prefer_xwayland: bool, platform: str,
+                       xcb_ok: Callable[[], bool]) -> tuple[str | None, str | None]:
+    """Vrátí platformu a varování; prostředí nemění a Qt neimportuje."""
+    if "QT_QPA_PLATFORM" in env or not platform.startswith("linux"):
+        return None, None
+    if not env.get("DISPLAY"):
+        return None, None
+    wayland = bool(env.get("WAYLAND_DISPLAY"))
+    if wayland and not prefer_xwayland:
+        return None, None
+    selected = "xcb;wayland" if wayland else None
+    if xcb_ok():
+        return selected, None
+    warning = ("Nelze načíst knihovnu libxcb-cursor0 (libxcb-cursor.so.0) potřebnou pro XWayland / X11 (xcb). "
+               "Po instalaci (Debian/Ubuntu: sudo apt install libxcb-cursor0) aplikaci restartujte. ")
+    warning += ("Qt zkusí použít Wayland s omezenou pozicí a vrstvou okna." if wayland else
+                "Bez této knihovny nelze na X11 spustit Qt.")
+    return selected, warning
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -76,11 +107,14 @@ def main(argv=None) -> int:
     if args.reset_position:
         cfg.appearance.x = cfg.appearance.y = None
 
-    # Wayland: kompozitor neumožňuje pozicovat okna ani vrstvy => preferuj XWayland, je-li k dispozici
-    if (sys.platform.startswith("linux") and cfg.network.linux_prefer_xwayland and os.environ.get("WAYLAND_DISPLAY")
-            and os.environ.get("DISPLAY") and "QT_QPA_PLATFORM" not in os.environ):
-        os.environ["QT_QPA_PLATFORM"] = "xcb"
-        log.info("Wayland detekován – používám XWayland (xcb) kvůli pozici a vrstvě okna")
+    # Preferuj XWayland kvůli pozici a vrstvě okna, při selhání xcb nech Qt zkusit Wayland.
+    selected, warning = select_qt_platform(os.environ, cfg.network.linux_prefer_xwayland,
+                                           sys.platform, xcb_available)
+    if selected is not None:
+        os.environ["QT_QPA_PLATFORM"] = selected
+        log.info("Wayland detekován – preferuji XWayland (xcb) s fallbackem na Wayland")
+    if warning:
+        log.warning(warning)
 
     from PySide6.QtCore import QLockFile, Qt, QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
@@ -92,6 +126,9 @@ def main(argv=None) -> int:
     QApplication.setOrganizationName("Zelina")
     QApplication.setApplicationVersion(__version__)
     app = QApplication(sys.argv[:1])
+    if selected == "xcb;wayland" and app.platformName() == "wayland":
+        app.setProperty("xcb_fallback", "cursor" if warning is not None else "other")
+        log.warning("XWayland (xcb) se nepodařilo načíst – používám Wayland s omezenou pozicí a vrstvou okna.")
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(app_icon("ok"))
     set_language(cfg.general.language)

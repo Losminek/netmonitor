@@ -30,6 +30,8 @@ spuštění staženého souboru zobrazí „Systém Windows ochránil váš poč
 
 ## Rychlý start (ze zdrojů)
 
+Na Debianu/Ubuntu nejprve nainstalujte systémové knihovny Qt: `sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libegl1`.
+
 ```bash
 python -m venv .venv
 # Windows:  .venv\Scripts\activate      Linux/macOS:  source .venv/bin/activate
