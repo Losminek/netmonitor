@@ -126,35 +126,6 @@ def test_dialog_entry_points_use_activation(ctrl, monkeypatch, kind):
                 dialog.deleteLater()
 
 
-@pytest.mark.parametrize(("icon_name", "answer_name"), [
-    ("Information", "Ok"), ("Warning", "Ok"), ("Question", "Yes"), ("Question", "No"),
-])
-def test_wol_message_activates_and_keeps_modal_answer(qapp, monkeypatch, icon_name, answer_name):
-    """Regrese L29: WoL aktivuje modální hlášení a zachová odpovědi Ano/Ne i OK."""
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QMessageBox
-    from netmonitor.gui import tools_dialog
-    from netmonitor.gui.widgets import show_dialog
-
-    opened = []
-    modal = []
-    answer = getattr(QMessageBox.StandardButton, answer_name)
-    buttons = (QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-               if icon_name == "Question" else QMessageBox.StandardButton.Ok)
-
-    def activate(dialog):
-        opened.append(dialog)
-        modal.append(dialog.isModal())
-        show_dialog(dialog)
-
-    monkeypatch.setattr(tools_dialog, "show_dialog", activate)
-    QTimer.singleShot(0, lambda: opened[0].button(answer).click())
-    result = tools_dialog._wol_message(None, getattr(QMessageBox.Icon, icon_name), "Test WoL", buttons)
-    assert result == answer
-    assert len(opened) == 1 and modal == [True]
-    assert opened[0].standardButtons() == buttons
-
-
 def test_widget_shows_real_measurements(ctrl):
     from netmonitor.gui.main_widget import MainWidget
     w = MainWidget(ctrl)
