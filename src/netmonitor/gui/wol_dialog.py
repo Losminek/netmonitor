@@ -1,15 +1,17 @@
 """Samostatný seznam zařízení WoL a výběr z již známých sousedů (bez skenování)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtCore import QModelIndex, Qt, Slot
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QSpinBox, QTreeWidget,
+                               QMenu, QMessageBox, QPushButton, QSpinBox, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout)
 from shiboken6 import isValid
 
 from ..core import wol
 from ..core.config import WolDevice, new_id
 from . import theme
+from .i18n import tr
 from .tools_dialog import wake
 
 
@@ -119,6 +121,8 @@ class WolDevicesDialog(QDialog):
         self.table.resizeColumnToContents(0)
         self.table.resizeColumnToContents(1)
         self.table.blockSignals(False)
+        if self.edit_id is not None and not any(d.id == self.edit_id for d in self.ctrl.cfg.wol.devices):
+            self.new()
 
     def new(self):
         self.edit_id = None
@@ -131,7 +135,8 @@ class WolDevicesDialog(QDialog):
         active = self.ctrl.network.active if self.ctrl.network else None
         broadcast = (wol.directed_broadcast(active.ipv4[0], active.ipv4_masks[0])
                      if active and active.ipv4 and active.ipv4_masks else None)
-        self.broadcast.setText(broadcast or "")
+        self.broadcast.clear()
+        self.broadcast.setPlaceholderText(broadcast or "automaticky podle aktivního adaptéru")
         self.error.clear()
 
     def _selected(self, item, _previous):
@@ -190,16 +195,42 @@ class WolDevicesDialog(QDialog):
         dialog.deleteLater()
 
 
-def add_wol_menu(menu, ctrl, open_dialog):
-    """Jediný vstup pro widget/tray; lze jej přesunout i do průběžně aktualizovaného menu."""
-    menu.addAction("Probudit zařízení…", open_dialog)
-    quick = menu.addMenu("Uložená zařízení WoL")
-    quick.setEnabled(bool(ctrl.cfg.wol.devices))
-    for device in ctrl.cfg.wol.devices:
+class _WolQuickMenu(QMenu):
+    """Samostatně aktualizované podmenu, i když tray zachovává původní QMenu."""
+
+    def __init__(self, ctrl, parent=None):
+        super().__init__(tr("Uložená zařízení WoL"), parent)
+        self.ctrl = ctrl
+        self._signature: list[tuple[str, str]] | None = None
+        ctrl.config_changed.connect(self.refresh)
+        self.refresh(ctrl.cfg)
+
+    @Slot(object)
+    def refresh(self, _cfg):
+        signature = [(d.id, d.name) for d in self.ctrl.cfg.wol.devices]
+        if signature == self._signature:
+            return
+        self._signature = signature
+        self.clear()
+        if not signature:
+            self.addAction(tr("(žádná zařízení)")).setEnabled(False)
+        for device_id, name in signature:
+            action = self.addAction(name.replace("&", "&&"))
+            action.setData(("wol_device", device_id))
+            action.triggered.connect(self._wake)
+
+    @Slot()
+    def _wake(self):
         # ID se řeší až při kliknutí, aby se neposlalo na zastaralou MAC po úpravě seznamu.
-        def send_saved(_checked=False, device_id=device.id):
-            current = next((d for d in ctrl.cfg.wol.devices if d.id == device_id), None)
+        action = self.sender()
+        if isinstance(action, QAction):
+            _, device_id = action.data()
+            current = next((d for d in self.ctrl.cfg.wol.devices if d.id == device_id), None)
             if current:
-                wake(ctrl, current)
-        action = quick.addAction(device.name.replace("&", "&&"), send_saved)
-        action.setData(device.id)
+                wake(self.ctrl, current)
+
+
+def add_wol_menu(menu, ctrl, open_dialog):
+    """Jediný vstup pro widget/tray; podmenu si obnovu konfigurace zajišťuje samo."""
+    menu.addAction(tr("Probudit zařízení…"), open_dialog)
+    menu.addMenu(_WolQuickMenu(ctrl, menu))

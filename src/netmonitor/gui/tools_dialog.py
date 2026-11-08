@@ -383,7 +383,10 @@ class WolDialog(QDialog):
             return
         log.info("WoL %s (%s) -> %s", self.target.name, mac, ", ".join(sent))
         target_id = self.target.id if isinstance(self.target, PingTarget) else None
-        self.ctrl._db(lambda: self.ctrl.history.add_event("wol", target_id, None, f"MAC {wol.format_mac(mac)}"))
+        detail = f"MAC {wol.format_mac(mac)}"
+        if isinstance(self.target, WolDevice):
+            detail = f"{self.target.name} – {detail}"
+        self.ctrl._db(lambda: self.ctrl.history.add_event("wol", target_id, None, detail))
         if not self.target.host:
             self._status(f"Probouzecí paket odeslán na {wol.format_mac(mac)}. Ověření není nastaveno.")
             return
