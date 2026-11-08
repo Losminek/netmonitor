@@ -170,6 +170,7 @@ class MonitorEngine:
         self._seq = 0
         self._inflight: set[str] = set()
         self._executor: ThreadPoolExecutor | None = None
+        self._retired_executors: list[ThreadPoolExecutor] = []
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._paused = False
@@ -178,7 +179,15 @@ class MonitorEngine:
     def set_max_concurrent(self, limit: int) -> None:
         """Změní limit bez restartu; rozběhnuté sondy vždy doběhnou."""
         with self._cond:
-            self.max_concurrent = max(1, min(MAX_CONCURRENT, int(limit)))
+            limit = max(1, min(MAX_CONCURRENT, int(limit)))
+            if limit == self.max_concurrent:
+                return
+            self.max_concurrent = limit
+            if self._executor is not None and not self._stop.is_set():
+                old = self._executor
+                self._executor = ThreadPoolExecutor(max_workers=limit, thread_name_prefix="ping")
+                self._retired_executors.append(old)
+                old.shutdown(wait=False)  # bez rušení sond; stop() počká i na staré pooly
             self._cond.notify_all()
 
     def set_targets(self, targets: Iterable[PingTarget]) -> None:
@@ -257,9 +266,9 @@ class MonitorEngine:
             return
         self._stop.clear()
         self.reschedule_all()      # po (re)startu měřit hned, ne až po intervalu
-        # Kapacita poolu dovolí limit i zvýšit. Úlohy se neřadí do neomezené fronty:
-        # plánovač propouští nejvýše max_concurrent rozběhnutých sond.
-        self._executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT, thread_name_prefix="ping")
+        # Limit hlídá plánovač i pool, aby rychlé předávání kapacity nevytvářelo
+        # další vlákna ještě před návratem předchozího workeru do poolu.
+        self._executor = ThreadPoolExecutor(max_workers=self.max_concurrent, thread_name_prefix="ping")
         self._thread = threading.Thread(target=self._loop, name="ping-scheduler", daemon=True)
         self._thread.start()
 
@@ -270,9 +279,14 @@ class MonitorEngine:
         if self._thread:
             self._thread.join(timeout)
             self._thread = None
-        if self._executor:
-            self._executor.shutdown(wait=True, cancel_futures=True)
+        with self._lock:
+            executors = self._retired_executors
+            self._retired_executors = []
+            if self._executor is not None:
+                executors.append(self._executor)
             self._executor = None
+        for executor in executors:
+            executor.shutdown(wait=True, cancel_futures=True)
         with self._lock:
             self._inflight.clear()
 
