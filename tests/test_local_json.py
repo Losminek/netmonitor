@@ -46,29 +46,108 @@ def test_invalid_local_json_uses_defaults_and_preserves_bytes(tmp_path, caplog, 
     assert any(r.levelno == logging.WARNING and str(path) in r.message for r in caplog.records)
 
 
-@pytest.mark.parametrize("data", [
-    {"appearance": {"x": "invalid", "y": 100}},
-    {"appearance": {"x": [], "y": {}}},
-    {"appearance": {"x": 2**40}},
-    {"appearance": {"y": True}},
-    {"appearance": {"y": 1.5}},
-    *[{"appearance": {"colors": {"ok": value}}} for value in (None, 7, True, [], {})],
-    {"appearance": {"colors": []}},
-    {"general": "invalid"},
-    {"network": {"adapter_name": []}},
-    {"network": {"external_api": "false"}},
-    {"network": {"ip_profiles": [{"name": "Test", "dns": 42}]}},
-    {"ping": {"thresholds": []}},
-    {"ping": {"targets": "invalid"}},
-    {"notifications": {"high_latency_ms": []}},
+@pytest.mark.parametrize("bad_fields,field_name", [
+    ({"appearance": {"x": "invalid", "y": 100}}, "appearance.x"),
+    ({"appearance": {"x": [], "y": {}}}, "appearance.x"),
+    ({"appearance": {"x": 2**40}}, "appearance.x"),
+    ({"appearance": {"y": True}}, "appearance.y"),
+    ({"appearance": {"y": 1.5}}, "appearance.y"),
+    *[({"appearance": {"colors": {"ok": value}}}, "appearance.colors.ok")
+      for value in (None, 7, True, [], {})],
+    ({"appearance": {"colors": []}}, "appearance.colors"),
+    ({"general": "invalid"}, "general"),
+    ({"network": {"adapter_name": []}}, "network.adapter_name"),
+    ({"network": {"external_api": "false"}}, "network.external_api"),
+    ({"network": {"ip_profiles": [{"name": "Test", "dns": 42}]}}, "network.ip_profiles"),
+    ({"ping": {"thresholds": []}}, "ping.thresholds"),
+    ({"ping": {"targets": "invalid"}}, "ping.targets"),
+    ({"notifications": {"high_latency_ms": []}}, "notifications.high_latency_ms"),
 ])
-def test_config_invalid_field_types_are_backed_up(tmp_path, data):
-    """Regrese B02: neplatné typy včetně geometrie a barev neprojdou do Qt."""
+def test_config_invalid_field_types_keep_other_settings(tmp_path, caplog, bad_fields, field_name):
+    """Regrese R1: vadné pole dostane výchozí hodnotu, ostatní nastavení i soubor zůstanou."""
+    data: dict = {"history": {"retention_days": 17}, "ping": {"targets": [
+        {"id": "a", "name": "Test A", "host": "192.0.2.1"},
+        {"id": "b", "name": "Test B", "host": "192.0.2.2"},
+    ]}}
+    for group, value in bad_fields.items():
+        if isinstance(value, dict) and group in data:
+            data[group].update(value)
+        else:
+            data[group] = value
     path = tmp_path / "config.json"
     payload = json.dumps(data).encode()
     path.write_bytes(payload)
-    assert_defaults(c.load_config(path))
-    assert_backup(path, payload)
+    cfg = c.load_config(path)
+    assert cfg.history.retention_days == 17
+    if field_name != "ping.targets":
+        assert [t.id for t in cfg.ping.targets] == ["a", "b"]
+    defaults = c.AppConfig.from_dict({})
+    if field_name == "ping.targets":
+        assert [(t.name, t.host) for t in cfg.ping.targets] == [(t.name, t.host) for t in defaults.ping.targets]
+    else:
+        actual, default = cfg, defaults
+        for part in field_name.split("."):
+            actual, default = getattr(actual, part), getattr(default, part)
+        assert actual == default
+    assert field_name in caplog.text
+    assert path.read_bytes() == payload
+    assert not list(tmp_path.glob("*.corrupt-*"))
+
+
+@pytest.mark.parametrize("bad_target", [
+    5, None, [], {},
+    {"host": ["PRIVATE_VALUE_FOR_LOG"]},
+    {"host": "192.0.2.3", "enabled": "PRIVATE_VALUE_FOR_LOG"},
+])
+def test_bad_field_and_target_preserve_valid_targets(tmp_path, caplog, bad_target):
+    """Regrese R1: vadná opacity ani jednotlivý cíl nezahodí zbytek konfigurace."""
+    path = tmp_path / "config.json"
+    payload = json.dumps({
+        "schema_version": 3,
+        "general": {"language": "en"},
+        "appearance": {"opacity": "PRIVATE_VALUE_FOR_LOG", "height": 900},
+        "ping": {"max_concurrent": 7, "targets": [
+            {"id": "a", "name": "Test A", "host": "192.0.2.1"}, bad_target,
+            {"id": "b", "name": "Test B", "host": "192.0.2.2"},
+        ]},
+    }).encode()
+    path.write_bytes(payload)
+    cfg = c.load_config(path)
+    assert cfg.general.language == "en"
+    assert cfg.appearance.opacity == c.AppearanceConfig().opacity
+    assert cfg.appearance.height == 900 and cfg.ping.max_concurrent == 7
+    assert [(t.id, t.host) for t in cfg.ping.targets] == [("a", "192.0.2.1"), ("b", "192.0.2.2")]
+    assert "appearance.opacity" in caplog.text and "ping.targets[1]" in caplog.text
+    assert "PRIVATE_VALUE_FOR_LOG" not in caplog.text
+    assert path.read_bytes() == payload
+    assert not list(tmp_path.glob("*.corrupt-*"))
+
+
+def test_save_config_does_not_validate_existing_fields(tmp_path, monkeypatch):
+    """Regrese R2: save ověřuje jen JSON objekt, nikoli typy jeho polí."""
+    cfg = c.AppConfig.from_dict({"ping": {"targets": []}})
+    path = tmp_path / "config.json"
+    path.write_text('{"appearance": {"opacity": "x"}, "ping": {"targets": [5]}}', encoding="utf-8")
+
+    def no_validation(*args, **kwargs):
+        pytest.fail("save_config nesmí validovat pole existující konfigurace")
+
+    monkeypatch.setattr(c.AppConfig, "from_dict", no_validation)
+    c.save_config(cfg, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == cfg.to_dict()
+    assert not list(tmp_path.glob("*.corrupt-*"))
+
+
+@pytest.mark.parametrize("payload", BAD_JSON)
+def test_save_config_preserves_invalid_json_object(tmp_path, payload):
+    """Regrese R2: nečitelný JSON objekt se i při přímém save nejprve odloží."""
+    cfg = c.AppConfig.from_dict({"ping": {"targets": []}})
+    path = tmp_path / "config.json"
+    path.write_bytes(payload)
+    c.save_config(cfg, path)
+    backups = list(tmp_path.glob("config.json.corrupt-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == payload
+    assert json.loads(path.read_text(encoding="utf-8")) == cfg.to_dict()
 
 
 @pytest.mark.parametrize("bad_fields", [
@@ -111,7 +190,7 @@ def test_unreadable_json_is_backed_up(tmp_path, monkeypatch, filename, caplog):
 def test_config_failed_backup_prevents_later_overwrite(tmp_path, monkeypatch, caplog):
     """Regrese B02: selhání zálohy nesmí změnit konfiguraci ani při pozdějším save."""
     path = tmp_path / "config.json"
-    payload = b'{"appearance": {"x": []}}'
+    payload = b"{ broken"
     path.write_bytes(payload)
 
     def deny_rename(*args, **kwargs):
