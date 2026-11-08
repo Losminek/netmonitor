@@ -6,8 +6,27 @@
 #   dist/NetMonitor-<verze>-linux-x86_64.tar.gz   (+ .desktop, ikona, install.sh)
 #   dist/netmonitor_<verze>_amd64.deb             (--deb, vyžaduje dpkg-deb)
 #   dist/NetMonitor-<verze>-x86_64.AppImage       (--appimage, vyžaduje appimagetool v PATH)
-# Systémové závislosti Qt (Debian/Ubuntu): libxcb-cursor0 libxkbcommon-x11-0 libegl1
+# Systémové závislosti Qt (Debian/Ubuntu): libxcb-cursor0 libxkbcommon-x11-0 libegl1 libgl1
 set -euo pipefail
+
+check_qt_xcb_libraries() {
+  local bundle=$1 i
+  local libraries=(libxcb-cursor.so.0 libxkbcommon-x11.so.0)
+  local packages=(libxcb-cursor0 libxkbcommon-x11-0)
+  local missing=()
+  for i in "${!libraries[@]}"; do
+    if [ ! -f "$bundle/${libraries[$i]}" ]; then
+      echo "Chyba: v bundlu $bundle chybí ${libraries[$i]}." >&2
+      missing+=("${packages[$i]}")
+    fi
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "Na build hostu doinstalujte: sudo apt install ${missing[*]}" >&2
+    echo "Potom build spusťte znovu; distribuční balíčky nebyly vytvořeny." >&2
+    return 1
+  fi
+}
+
 cd "$(dirname "$0")/.."
 VER=1.3.3
 SKIP_TESTS=0; DEB=0; APPIMAGE=0
@@ -24,6 +43,7 @@ $VPY -m pip install -q -r requirements-dev.txt pillow
 $VPY scripts/make_icons.py
 if [ $SKIP_TESTS -eq 0 ]; then QT_QPA_PLATFORM=offscreen $VPY -m pytest -q; fi
 $VPY -m PyInstaller packaging/netmonitor.spec --noconfirm --clean
+check_qt_xcb_libraries dist/NetMonitor/_internal
 
 ICON=src/netmonitor/resources/icons/netmonitor.png
 cp packaging/linux/netmonitor.desktop dist/NetMonitor/
@@ -48,7 +68,9 @@ Version: $VER
 Section: net
 Priority: optional
 Architecture: amd64
-Depends: libxcb-cursor0, libxkbcommon-x11-0, libegl1, iputils-ping
+Depends: libxcb-cursor0, libxkbcommon-x11-0, libegl1, libgl1, iputils-ping
+Recommends: traceroute
+Suggests: network-manager
 Maintainer: Marceli Zelina <noreply@zelina.eu>
 Description: NetMonitor - desktopovy sitovy monitor (widget)
  Transparentni widget s WAN/LAN informacemi, DNS a paralelnim ICMP monitoringem.
