@@ -28,7 +28,17 @@ powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -SkipTests
 ./scripts/build_linux.sh --appimage # + AppImage (vyžaduje appimagetool)
 ```
 
-- Systémové knihovny Qt: `sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libegl1`.
+- Balíčky obsahují Python, PySide6/Qt včetně pluginu xcb a knihovny `libxcb-cursor.so.0`
+  a `libxkbcommon-x11.so.0`. Build jejich přítomnost po PyInstalleru kontroluje a při chybě
+  skončí před vytvořením tar.gz, .deb nebo AppImage. Na build hostu musí být dostupné
+  balíčky `libxcb-cursor0` a `libxkbcommon-x11-0`.
+- Od cílového systému se očekávají glibc, grafické prostředí a OpenGL/EGL knihovny
+  (`sudo apt install libgl1 libegl1`); ty se nepřibalují ani do AppImage.
+  `.deb` deklaruje `Depends: libxcb-cursor0, libxkbcommon-x11-0, libegl1, libgl1, iputils-ping`
+  a doporučuje `traceroute` a `network-manager` (volitelné funkce traceroute a nastavení IP přes `nmcli`).
+- Instalátor z tar.gz před kopírováním ověří obě uvedené xcb knihovny v bundlu nebo systémové
+  cache `ldconfig -p`. Pokud chybí, vypíše varování s příkazem `sudo apt install …`, ale instalaci
+  neblokuje. Pro systémový fallback ICMP je potřeba `iputils-ping`.
 - Build je vázaný na glibc systému, kde vznikl – pro širokou kompatibilitu sestavujte na nejstarší
   podporované distribuci (např. Debian 12).
 - Autostart: `~/.config/autostart/netmonitor.desktop` (XDG; GNOME, KDE, Xfce, Cinnamon…).
