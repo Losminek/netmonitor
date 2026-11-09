@@ -125,7 +125,10 @@ class MainWidget(QWidget):
         self._press_pos: QPoint | None = None
         self._dragging = False
         self._win_offset = QPoint()
-        self._notification_count = 0
+        self._hidden_notification_count = 0
+        self._visible_notification: Notification | None = None
+        self._pending_notification: Notification | None = None
+        self._pending_notification_count = 0
         self.platform_notice = ""
         self.update_version: str | None = None
 
@@ -150,6 +153,10 @@ class MainWidget(QWidget):
         self._notification_timer.setSingleShot(True)
         self._notification_timer.setInterval(8000)
         self._notification_timer.timeout.connect(self._expire_notifications)
+        self._notification_batch_timer = QTimer(self)
+        self._notification_batch_timer.setSingleShot(True)
+        self._notification_batch_timer.setInterval(0)
+        self._notification_batch_timer.timeout.connect(self._flush_notifications)
 
         ctrl.target_result.connect(lambda s, r: self.ping.update_snapshot(s))
         ctrl.targets_changed.connect(lambda: self.ping.set_targets(self.ctrl.cfg, self.ctrl.snapshots))
@@ -192,19 +199,39 @@ class MainWidget(QWidget):
         self.net.update_connection(ev, self.ctrl.cfg.appearance.colors)
 
     def _on_notification(self, n: Notification) -> None:
-        """Bez tray zobrazí krátkou zprávu ve widgetu a uchová ji v lokálním logu."""
+        """Bez tray sloučí zprávy jednoho ticku; celé texty uchová v lokálním logu."""
         if self.ctrl.tray_available:
             return
         log.log(logging.WARNING if n.critical else logging.INFO, "%s: %s", n.title, n.message)
-        self._notification_count += 1
-        self.notification_notice.set_notification(n, self._notification_count - 1)
+        pending = self._pending_notification
+        if pending is None or not pending.critical or n.critical:
+            self._pending_notification = n  # při stejné závažnosti vyhraje poslední
+        self._pending_notification_count += 1
+        if not self._notification_batch_timer.isActive():
+            self._notification_batch_timer.start()
+
+    def _flush_notifications(self) -> None:
+        n, count = self._pending_notification, self._pending_notification_count
+        self._pending_notification, self._pending_notification_count = None, 0
+        if n is None:
+            return
+        primary = self._visible_notification
+        if primary is not None and primary.critical and not n.critical:
+            # Výpadek ponech do konce jeho okna; méně závažná dávka se samostatně nezobrazí.
+            self._hidden_notification_count += count
+        else:
+            primary = self._visible_notification = n
+            # Předchozí hlavní text už byl zobrazený v jiném ticku, proto se nepočítá.
+            self._hidden_notification_count += count - 1
+            self._notification_timer.start()
+        self.notification_notice.set_notification(primary, self._hidden_notification_count)
         self._style_notification_notice()
         self.notification_notice.show()
-        self._notification_timer.start()
 
     def _expire_notifications(self) -> None:
         self.notification_notice.hide()
-        self._notification_count = 0
+        self._hidden_notification_count = 0
+        self._visible_notification = None
 
     def _style_notification_notice(self) -> None:
         colors = self.ctrl.cfg.appearance.colors
