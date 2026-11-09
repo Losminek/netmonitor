@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, TextIO
 
 from .ping_engine import Resolver
 
@@ -161,7 +164,20 @@ def run(host: str, on_hop: Callable[[Hop], None], *, max_hops: int = 30, probes:
     return ip, _run_system(ip, on_hop, max_hops, probes, timeout, cancelled)
 
 
+def _stop_process(proc: subprocess.Popen) -> None:
+    """Vždy sklidí proces; ani ignorovaný terminate nesmí zablokovat zrušení."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    proc.wait()
+
+
 def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
+    if cancelled():
+        return "Zrušeno"
     cmd = system_command(ip, max_hops, probes, timeout)
     if not cmd:
         if sys.platform == "win32":
@@ -171,25 +187,76 @@ def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
     parse = {"traceroute": parse_traceroute_line, "tracepath": parse_tracepath_line,
              "tracert": parse_tracert_line}[kind]
     env = dict(os.environ, LC_ALL="C", LANG="C")
-    extra: dict = {}
+    extra: dict = {"errors": "replace"}
     if sys.platform == "win32":
         extra = {"creationflags": 0x08000000, "encoding": "oem", "errors": "replace"}   # CREATE_NO_WINDOW
     try:
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
                                 env=env, text=True, bufsize=1, **extra)
     except OSError as e:
-        return str(e)
+        return f"Nelze spustit {kind}: {e}"
+    # Čtení pipe ve vláknech funguje i na Windows. Blokující readline (včetně
+    # neúplného řádku) nikdy neblokuje řídicí smyčku s kontrolou zrušení/deadlinu.
+    lines: queue.Queue[str | None] = queue.Queue(maxsize=256)
+    stopping = threading.Event()
+    stderr_tail = ""
+
+    def put_line(line: str | None) -> None:
+        while not stopping.is_set():
+            try:
+                lines.put(line, timeout=0.05)
+                return
+            except queue.Full:
+                pass
+
+    def read_stdout(stream: TextIO) -> None:
+        try:
+            for line in stream:
+                put_line(line)
+                if stopping.is_set():
+                    break
+        finally:
+            stream.close()
+            put_line(None)
+
+    def read_stderr(stream: TextIO) -> None:
+        nonlocal stderr_tail
+        try:
+            while chunk := stream.read(1024):
+                stderr_tail = (stderr_tail + chunk)[-2048:]
+        finally:
+            stream.close()
+
+    assert proc.stdout is not None and proc.stderr is not None
+    readers = [threading.Thread(target=read_stdout, args=(proc.stdout,), name="traceroute-stdout", daemon=True),
+               threading.Thread(target=read_stderr, args=(proc.stderr,), name="traceroute-stderr", daemon=True)]
     reached = False
     pending: Hop | None = None       # tracepath vypisuje hop i víckrát – sloučit
+    # Rozpočet všech sond + rezerva na ukončení (dříve 5 s až po EOF).
+    deadline = time.monotonic() + max_hops * probes * max(1.0, timeout) + 5
+    error = ""
+    eof = False
     try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
+        for reader in readers:
+            reader.start()
+        while not (eof and proc.poll() is not None):
             if cancelled():
-                proc.terminate()
-                return "Zrušeno"
+                error = "Zrušeno"
+                break
+            if time.monotonic() >= deadline:
+                error = "Vypršel časový limit trasování"
+                break
+            try:
+                line = lines.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if line is None:
+                eof = True
+                continue
             hop = parse(line, ip)
             if hop is None:
                 continue
+            reached = reached or hop.reached
             if kind == "tracepath" and pending and pending.n == hop.n:
                 pending.rtts += hop.rtts
                 pending.ip = pending.ip or hop.ip
@@ -198,12 +265,17 @@ def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
             if pending:
                 on_hop(pending)
             pending = hop
-            reached = reached or hop.reached
         if pending:
             on_hop(pending)
-        proc.wait(timeout=5)
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+        stopping.set()
+        _stop_process(proc)
+        for reader in readers:
+            if reader.ident is not None:
+                reader.join()
+    if error:
+        return error
+    if proc.returncode:
+        detail = stderr_tail.strip()
+        return f"Příkaz {kind} selhal (návratový kód {proc.returncode})" + (f": {detail}" if detail else "")
     return "" if reached else "Cíl na sondy neodpověděl (může blokovat ICMP/UDP) – trasa je zobrazena, kam až vede"

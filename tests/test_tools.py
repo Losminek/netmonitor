@@ -1,5 +1,9 @@
 import socket
+import subprocess
+import sys
 import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -179,6 +183,214 @@ def test_traceroute_live_localhost():
 def test_traceroute_unresolvable():
     ip, err = traceroute.run("does-not-exist.invalid", lambda h: None)
     assert ip is None and err
+
+
+def _local_trace(monkeypatch, code, kind="traceroute") -> list[subprocess.Popen]:
+    """Pouze lokální Python child, nikdy systémový traceroute ani síť."""
+    processes = []
+    popen = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        proc = popen(*args, **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr(traceroute, "system_command", lambda *args: ([sys.executable, "-c", code], kind))
+    monkeypatch.setattr(traceroute.subprocess, "Popen", spawn)
+    return processes
+
+
+def test_traceroute_already_cancelled(monkeypatch):
+    """Regrese B05: předem zrušený běh nesmí ani spustit mlčící proces."""
+    processes = _local_trace(monkeypatch, "import time; time.sleep(30)")
+    start = time.monotonic()
+    ip, err = traceroute.run("192.0.2.1", lambda h: None, cancelled=lambda: True)
+    assert time.monotonic() - start <= 2
+    assert ip == "192.0.2.1" and err == "Zrušeno" and not processes
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_traceroute_cancel_silent_process(monkeypatch, tmp_path, partial):
+    """Regrese B05: mlčení i neukončený řádek musí jít zrušit do 2 s a proces sklidit."""
+    ready = tmp_path / "ready"
+    code = ("import pathlib, sys, time; "
+            + ("sys.stdout.write(' 1  192.0.2.2  1 ms'); sys.stdout.flush(); " if partial else "")
+            + f"pathlib.Path({str(ready)!r}).touch(); time.sleep(30)")
+    processes = _local_trace(monkeypatch, code)
+    cancel = threading.Event()
+    result = []
+    worker = threading.Thread(target=lambda: result.append(
+        traceroute.run("192.0.2.1", lambda h: None, cancelled=cancel.is_set)))
+    worker.start()
+    try:
+        limit = time.monotonic() + 3
+        while not ready.exists() and time.monotonic() < limit:
+            time.sleep(0.01)
+        assert ready.exists() and processes[0].poll() is None
+        start = time.monotonic()
+        cancel.set()
+        worker.join(2)
+        assert not worker.is_alive() and time.monotonic() - start <= 2
+        assert result == [("192.0.2.1", "Zrušeno")]
+        assert processes[0].poll() is not None
+        assert not [t for t in threading.enumerate() if t.name.startswith("traceroute-")]
+    finally:
+        cancel.set()
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        worker.join(3)
+
+
+def test_traceroute_cancel_during_spawn(monkeypatch):
+    """Regrese B05: zrušení během startu procesu se kontroluje i bez prvního řádku."""
+    processes = _local_trace(monkeypatch, "import time; time.sleep(30)")
+    start = time.monotonic()
+    _, err = traceroute.run("192.0.2.1", lambda h: None, cancelled=lambda: bool(processes))
+    assert err == "Zrušeno" and time.monotonic() - start <= 2
+    assert processes and processes[0].poll() is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="ignorování SIGTERM je POSIX scénář")
+def test_traceroute_kills_uncooperative_process(monkeypatch, tmp_path):
+    """Regrese B05: po ignorovaném terminate následuje kill a wait do 2 s."""
+    ready = tmp_path / "ready"
+    processes = _local_trace(monkeypatch,
+                            "import pathlib, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(30)")
+    cancelled_at = []
+
+    def cancelled():
+        if ready.exists():
+            if not cancelled_at:
+                cancelled_at.append(time.monotonic())
+            return True
+        return False
+
+    _, err = traceroute.run("192.0.2.1", lambda h: None, cancelled=cancelled)
+    assert err == "Zrušeno" and time.monotonic() - cancelled_at[0] <= 2
+    assert processes[0].returncode == -9
+
+
+@pytest.mark.parametrize("output", ["", "print(' 1  192.0.2.1  1 ms'); "])
+def test_traceroute_stderr_error(monkeypatch, output):
+    """Regrese B05: chyba nástroje se nezamění za nedosažitelný cíl ani při dosaženém hopu."""
+    processes = _local_trace(monkeypatch, "import sys; " + output
+                            + "sys.stderr.write('x' * 10000 + 'permission denied'); sys.exit(7)")
+    hops = []
+    ip, err = traceroute.run("192.0.2.1", hops.append)
+    assert ip == "192.0.2.1" and "selhal" in err and "7" in err and "permission denied" in err
+    assert "neodpověděl" not in err and len(err) < 2200 and processes[0].returncode == 7
+    assert bool(hops) == bool(output)
+
+
+def test_traceroute_nonzero_without_stderr(monkeypatch):
+    """Regrese B05: i nenulový exit bez stderr obsahuje skutečný důvod selhání."""
+    _local_trace(monkeypatch, "raise SystemExit(2)")
+    _, err = traceroute.run("192.0.2.1", lambda h: None)
+    assert "selhal" in err and "2" in err and "neodpověděl" not in err
+
+
+@pytest.mark.parametrize("close_stdout", [False, True])
+def test_traceroute_total_deadline(monkeypatch, tmp_path, close_stdout):
+    """Regrese B05: celkový deadline platí za mlčení i po EOF stále běžícího procesu."""
+    ready = tmp_path / "ready"
+    processes = _local_trace(monkeypatch, "import os, pathlib, time; "
+                            + ("os.close(1); " if close_stdout else "")
+                            + f"pathlib.Path({str(ready)!r}).touch(); time.sleep(30)")
+    # Posun jen hodin core, skutečné čekání procesu zůstává nemockované.
+    monkeypatch.setattr(traceroute, "time", SimpleNamespace(
+        monotonic=lambda: time.monotonic() + (1000 if ready.exists() else 0)))
+    start = time.monotonic()
+    _, err = traceroute.run("192.0.2.1", lambda h: None)
+    assert "časový limit" in err and time.monotonic() - start <= 2
+    assert processes[0].poll() is not None
+
+
+def test_traceroute_start_failure(monkeypatch):
+    """Regrese B05: chybu spuštění doplňuje český kontext, chybějící nástroj je samostatný stav."""
+    monkeypatch.setattr(traceroute, "system_command", lambda *args: None)
+    _, err = traceroute.run("192.0.2.1", lambda h: None)
+    assert "nenalezen" in err or "Není nainstalován" in err
+    monkeypatch.setattr(traceroute, "system_command", lambda *args: (["missing-program"], "traceroute"))
+
+    def fail(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(traceroute.subprocess, "Popen", fail)
+    _, err = traceroute.run("192.0.2.1", lambda h: None)
+    assert "Nelze spustit traceroute" in err and "permission denied" in err
+
+
+@pytest.mark.parametrize("kind,line", [
+    ("traceroute", " 1  192.0.2.1  1 ms"),
+    ("tracert", " 1  1 ms  1 ms  1 ms  192.0.2.1"),
+    ("tracepath", " 1:  192.0.2.2  1.000ms\n 1:  192.0.2.1  2.000ms reached"),
+])
+def test_traceroute_local_success(monkeypatch, kind, line):
+    """Regrese B05: fronta doručí i poslední řádek bez newline a sloučený tracepath cíl."""
+    processes = _local_trace(monkeypatch, f"import sys; sys.stdout.write({line!r})", kind)
+    hops = []
+    assert traceroute.run("192.0.2.1", hops.append) == ("192.0.2.1", "")
+    assert hops[-1].reached and processes[0].returncode == 0
+
+
+@pytest.mark.parametrize("finish", ["close", "reject", "accept"])
+def test_traceroute_dialog_waits_for_worker(monkeypatch, tmp_path, finish):
+    """Regrese B05: zavření i Escape drží dialog/bridge až do sklizení procesu a workeru."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+    from shiboken6 import isValid
+    from netmonitor.gui import tools_dialog as tools
+
+    app = QApplication.instance() or QApplication([])
+    ready = tmp_path / "ready"
+    processes = _local_trace(monkeypatch, "import pathlib, time; "
+                            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(30)")
+    dialog = tools.open_traceroute(SimpleNamespace(), PingTarget(name="Test", host="192.0.2.1"))
+    finished = []
+    dialog.finished.connect(lambda result: finished.append(not dialog.busy() and processes[0].poll() is not None))
+    try:
+        limit = time.monotonic() + 3
+        while not ready.exists() and time.monotonic() < limit:
+            app.processEvents()
+            time.sleep(0.01)
+        assert ready.exists() and dialog.busy()
+        start = time.monotonic()
+        getattr(dialog, finish)()
+        assert dialog in tools._trace_dialogs and not finished and isValid(dialog)
+        while not finished and time.monotonic() - start < 2:
+            app.processEvents()
+            time.sleep(0.01)
+        assert finished == [True] and time.monotonic() - start <= 2
+        assert dialog not in tools._trace_dialogs
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert not isValid(dialog)
+    finally:
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        if isValid(dialog):
+            if dialog._thread is not None:
+                dialog._thread.join(3)
+            dialog.close()
+        app.processEvents()
+
+
+def test_traceroute_dialog_displays_error(monkeypatch):
+    """Regrese B05: stderr chyba má v GUI přednost i před dosaženým hopem."""
+    from PySide6.QtWidgets import QApplication
+    from netmonitor.gui.tools_dialog import TracerouteDialog
+
+    app = QApplication.instance() or QApplication([])
+    dialog = TracerouteDialog(SimpleNamespace(), PingTarget(name="Test", host="192.0.2.1"))
+    dialog.hops = [traceroute.Hop(1, "192.0.2.1", [1], reached=True)]
+    dialog._finished("192.0.2.1", "Příkaz traceroute selhal: <permission denied>")
+    assert dialog.status.text() == "Příkaz traceroute selhal: <permission denied>"
+    dialog.close()
+    app.processEvents()
 
 
 # ---------------------------------------------------------------- Test rychlosti
