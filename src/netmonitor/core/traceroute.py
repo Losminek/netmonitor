@@ -167,31 +167,38 @@ def run(host: str, on_hop: Callable[[Hop], None], *, max_hops: int = 30, probes:
 
 def _stop_process(proc: subprocess.Popen) -> None:
     """Vždy sklidí proces; ani ignorovaný terminate nesmí zablokovat zrušení."""
-    if sys.platform != "win32":
-        # Skupina patří jen tomuto běhu (start_new_session). Potomci mohou
-        # držet pipe i po skončení rodiče, proto signály neposíláme jen jemu.
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
-        # Rodič mohl skončit dřív než potomek, který SIGTERM ignoruje.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    running = proc.returncode is None
+    try:
+        # Už sklizenému procesu mohl OS znovu přidělit PID; jeho skupinu
+        # nesignalizovat. Stav zachytit před případným wait/poll v úklidu.
+        if not running:
+            return
+        if sys.platform != "win32":
+            # Skupina patří jen tomuto běhu (start_new_session). Potomci
+            # mohou držet pipe, proto signály neposíláme jen rodiči.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except OSError as e:
+                if not isinstance(e, ProcessLookupError):
+                    proc.kill()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            # Rodič mohl skončit dřív než potomek, který SIGTERM ignoruje.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError as e:
+                if not isinstance(e, ProcessLookupError):
+                    proc.kill()
+        elif proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    finally:
         proc.wait()
-        return
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    proc.wait()
 
 
 def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
@@ -289,12 +296,14 @@ def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
             on_hop(pending)
     finally:
         stopping.set()
-        _stop_process(proc)
-        for reader in readers:
-            if reader.ident is not None:
-                # Pojistka i pro Windows nebo potomka, který opustil POSIX
-                # skupinu: cizí otevřená pipe nesmí zadržet worker/dialog.
-                reader.join(timeout=0.2)
+        try:
+            _stop_process(proc)
+        finally:
+            for reader in readers:
+                if reader.ident is not None:
+                    # Pojistka i pro Windows nebo potomka, který opustil POSIX
+                    # skupinu: cizí otevřená pipe nesmí zadržet worker/dialog.
+                    reader.join(timeout=0.2)
     if error:
         return error
     if proc.returncode:
