@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -200,6 +201,81 @@ def _local_trace(monkeypatch, code, kind="traceroute") -> list[subprocess.Popen]
     monkeypatch.setattr(traceroute, "system_command", lambda *args: ([sys.executable, "-c", code], kind))
     monkeypatch.setattr(traceroute.subprocess, "Popen", spawn)
     return processes
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="killpg je POSIX scénář")
+def test_traceroute_stop_finished_process_skips_killpg(monkeypatch):
+    """Regrese L32 review 3: sklizený proces už nesmí signalizovat potenciálně znovu použité PID."""
+    with subprocess.Popen([sys.executable, "-c", "pass"]) as proc:
+        assert proc.wait(timeout=3) == 0
+        killpg = Mock()
+        wait = Mock(wraps=proc.wait)
+        monkeypatch.setattr(traceroute.os, "killpg", killpg)
+        monkeypatch.setattr(proc, "wait", wait)
+        traceroute._stop_process(proc)
+        killpg.assert_not_called()
+        wait.assert_called_once_with()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="killpg je POSIX scénář")
+@pytest.mark.parametrize("failed_signal", ["SIGTERM", "SIGKILL"])
+def test_traceroute_stop_group_error_falls_back_to_kill(monkeypatch, failed_signal):
+    """Regrese L32 review 3: chyba oprávnění killpg použije kill rodiče a vždy wait."""
+    proc = Mock(spec=subprocess.Popen, returncode=None, pid=12345)
+
+    def killpg(pid, sig):
+        if sig == getattr(signal, failed_signal):
+            raise PermissionError("group signal denied")
+
+    monkeypatch.setattr(traceroute.os, "killpg", killpg)
+    traceroute._stop_process(proc)
+    proc.kill.assert_called_once_with()
+    assert proc.wait.call_args_list == [call(timeout=1), call()]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="killpg je POSIX scénář")
+def test_traceroute_stop_missing_group_still_waits(monkeypatch):
+    """Regrese L32 review 3: zaniklá skupina nepotřebuje fallback kill, wait se ale provede."""
+    proc = Mock(spec=subprocess.Popen, returncode=None, pid=12345)
+    monkeypatch.setattr(traceroute.os, "killpg", Mock(side_effect=ProcessLookupError))
+    traceroute._stop_process(proc)
+    proc.kill.assert_not_called()
+    assert proc.wait.call_args_list == [call(timeout=1), call()]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="killpg je POSIX scénář")
+def test_traceroute_stop_failed_fallback_still_waits(monkeypatch):
+    """Regrese L32 review 3: i selhání fallback kill musí projít závěrečným wait."""
+    proc = Mock(spec=subprocess.Popen, returncode=None, pid=12345)
+    proc.kill.side_effect = OSError("kill failed")
+    monkeypatch.setattr(traceroute.os, "killpg", Mock(side_effect=PermissionError))
+    with pytest.raises(OSError, match="kill failed"):
+        traceroute._stop_process(proc)
+    proc.wait.assert_called_once_with()
+
+
+def test_traceroute_stop_error_still_joins_readers(monkeypatch):
+    """Regrese L32 review 3: výjimka úklidu procesu nesmí přeskočit join obou čteček."""
+    processes = _local_trace(monkeypatch, "print(' 1  192.0.2.1  1 ms')")
+    stop = traceroute._stop_process
+    join = threading.Thread.join
+    joined = []
+
+    def fail_after_stop(proc):
+        stop(proc)
+        raise OSError("cleanup failed")
+
+    def record_join(thread, timeout=None):
+        joined.append((thread.name, timeout))
+        return join(thread, timeout)
+
+    monkeypatch.setattr(traceroute, "_stop_process", fail_after_stop)
+    monkeypatch.setattr(traceroute.threading.Thread, "join", record_join)
+    with pytest.raises(OSError, match="cleanup failed"):
+        traceroute.run("192.0.2.1", lambda h: None)
+    assert processes[0].poll() is not None
+    assert joined == [("traceroute-stdout", 0.2), ("traceroute-stderr", 0.2)]
+    assert not [t for t in threading.enumerate() if t.name.startswith("traceroute-")]
 
 
 def test_traceroute_already_cancelled(monkeypatch):
