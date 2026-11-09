@@ -13,6 +13,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -166,6 +167,24 @@ def run(host: str, on_hop: Callable[[Hop], None], *, max_hops: int = 30, probes:
 
 def _stop_process(proc: subprocess.Popen) -> None:
     """Vždy sklidí proces; ani ignorovaný terminate nesmí zablokovat zrušení."""
+    if sys.platform != "win32":
+        # Skupina patří jen tomuto běhu (start_new_session). Potomci mohou
+        # držet pipe i po skončení rodiče, proto signály neposíláme jen jemu.
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        # Rodič mohl skončit dřív než potomek, který SIGTERM ignoruje.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        return
     if proc.poll() is None:
         proc.terminate()
         try:
@@ -187,7 +206,7 @@ def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
     parse = {"traceroute": parse_traceroute_line, "tracepath": parse_tracepath_line,
              "tracert": parse_tracert_line}[kind]
     env = dict(os.environ, LC_ALL="C", LANG="C")
-    extra: dict = {"errors": "replace"}
+    extra: dict = {"errors": "replace", "start_new_session": True}
     if sys.platform == "win32":
         extra = {"creationflags": 0x08000000, "encoding": "oem", "errors": "replace"}   # CREATE_NO_WINDOW
     try:
@@ -232,8 +251,9 @@ def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
                threading.Thread(target=read_stderr, args=(proc.stderr,), name="traceroute-stderr", daemon=True)]
     reached = False
     pending: Hop | None = None       # tracepath vypisuje hop i víckrát – sloučit
-    # Rozpočet všech sond + rezerva na ukončení (dříve 5 s až po EOF).
-    deadline = time.monotonic() + max_hops * probes * max(1.0, timeout) + 5
+    # Rozpočet sond s 50% rezervou na interní čekání tracepath/tracert a režii
+    # plánování na tichých hopech; dalších 5 s na dokončení výstupu.
+    deadline = time.monotonic() + max_hops * probes * max(1.0, timeout) * 1.5 + 5
     error = ""
     eof = False
     try:
@@ -272,10 +292,13 @@ def _run_system(ip, on_hop, max_hops, probes, timeout, cancelled) -> str:
         _stop_process(proc)
         for reader in readers:
             if reader.ident is not None:
-                reader.join()
+                # Pojistka i pro Windows nebo potomka, který opustil POSIX
+                # skupinu: cizí otevřená pipe nesmí zadržet worker/dialog.
+                reader.join(timeout=0.2)
     if error:
         return error
     if proc.returncode:
-        detail = stderr_tail.strip()
+        detail = "\n".join(line for line in stderr_tail.splitlines()
+                           if not line.lstrip().startswith("traceroute to ")).strip()
         return f"Příkaz {kind} selhal (návratový kód {proc.returncode})" + (f": {detail}" if detail else "")
     return "" if reached else "Cíl na sondy neodpověděl (může blokovat ICMP/UDP) – trasa je zobrazena, kam až vede"
