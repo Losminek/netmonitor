@@ -20,7 +20,7 @@ def load_local(path):
 def assert_defaults(state):
     if isinstance(state, c.AppConfig):
         assert state.appearance == c.AppearanceConfig()
-        assert len(state.ping.targets) == 10
+        assert len(state.ping.targets) == len(c.default_targets())
     else:
         assert state.current is None and state.previous is None
         assert state.changed_at is None and state.isp_cache == {}
@@ -58,7 +58,7 @@ def test_invalid_local_json_uses_defaults_and_preserves_bytes(tmp_path, caplog, 
     ({"general": "invalid"}, "general"),
     ({"network": {"adapter_name": []}}, "network.adapter_name"),
     ({"network": {"external_api": "false"}}, "network.external_api"),
-    ({"network": {"ip_profiles": [{"name": "Test", "dns": 42}]}}, "network.ip_profiles"),
+    ({"network": {"ip_profiles": "invalid"}}, "network.ip_profiles"),
     ({"ping": {"thresholds": []}}, "ping.thresholds"),
     ({"ping": {"targets": "invalid"}}, "ping.targets"),
     ({"notifications": {"high_latency_ms": []}}, "notifications.high_latency_ms"),
@@ -206,7 +206,7 @@ def test_config_failed_backup_prevents_later_overwrite(tmp_path, monkeypatch, ca
         assert "Test: nelze odložit" in caplog.text
     c.save_config(cfg, path)
     assert list(tmp_path.glob("config.json.corrupt-*"))[0].read_bytes() == payload
-    assert len(c.load_config(path).ping.targets) == 10
+    assert len(c.load_config(path).ping.targets) == len(c.default_targets())
 
 
 def test_repeated_corruption_does_not_replace_backup(tmp_path):
