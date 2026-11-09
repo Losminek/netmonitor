@@ -210,14 +210,60 @@ class HistoryStore:
         self.flush()
         bucket_s = max(60, int(bucket_s))
         with self._lock:
-            cur = self._conn.execute(
-                """SELECT (ts / ?) * ? AS b, min(rtt_min),
-                          sum(rtt_avg * n_ok) / nullif(sum(CASE WHEN rtt_avg IS NOT NULL THEN n_ok END), 0),
-                          max(rtt_max), sum(n_ok), sum(n_fail)
-                   FROM samples_1m WHERE target_id = ? AND ts >= ?
-                   GROUP BY b ORDER BY b""",
-                (bucket_s, bucket_s, target_id, int(since)))
-            return [SeriesPoint(float(r[0]), r[1], r[2], r[3], int(r[4] or 0), int(r[5] or 0)) for r in cur]
+            return self._series_locked(target_id, since, bucket_s)
+
+    def _series_locked(self, target_id: str, since: float, bucket_s: int) -> list[SeriesPoint]:
+        """Čtení série; volající drží _lock."""
+        cur = self._conn.execute(
+            """SELECT (ts / ?) * ? AS b, min(rtt_min),
+                      sum(rtt_avg * n_ok) / nullif(sum(CASE WHEN rtt_avg IS NOT NULL THEN n_ok END), 0),
+                      max(rtt_max), sum(n_ok), sum(n_fail)
+               FROM samples_1m WHERE target_id = ? AND ts >= ?
+               GROUP BY b ORDER BY b""",
+            (bucket_s, bucket_s, target_id, int(since)))
+        return [SeriesPoint(float(r[0]), r[1], r[2], r[3], int(r[4] or 0), int(r[5] or 0)) for r in cur]
+
+    def hour_data(self, target_id: str, since: float) -> tuple[list[SeriesPoint], float, dict]:
+        """Hodinový graf a souhrn ze stejného snapshotu, jediným SELECTem.
+
+        Celou minutu nahradíme raw body jen při shodě počtů OK/FAIL. Minuta
+        restartu (nebo oříznutí ring-bufferu) tak zůstane z DB, pokud RAM
+        neobsahuje všechny její vzorky. Neztratí se starší data ani se nic
+        nezapočítá dvakrát. Filtr období je stejný jako u summary().
+        """
+        self.flush()
+        with self._lock:
+            minutes = self._series_locked(target_id, since, 60)
+            raw = list(self._raw.get(target_id, ()))
+        by_minute: dict[int, list[SeriesPoint]] = defaultdict(list)
+        for ts, rtt, _status in raw:
+            by_minute[int(ts // 60 * 60)].append(
+                SeriesPoint(ts, rtt, rtt, rtt, int(rtt is not None), int(rtt is None)))
+        points: list[SeriesPoint] = []
+        raw_points: list[SeriesPoint] = []
+        for minute in minutes:
+            samples = by_minute.get(int(minute.ts), [])
+            if (sum(p.n_ok for p in samples), sum(p.n_fail for p in samples)) == (minute.n_ok, minute.n_fail):
+                points.extend(samples)
+                raw_points.extend(samples)
+            else:
+                points.append(minute)
+        points.sort(key=lambda p: p.ts)
+        raw_points.sort(key=lambda p: p.ts)
+        bucket = (max(1.0, (raw_points[-1].ts - raw_points[0].ts) / (len(raw_points) - 1))
+                  if len(raw_points) >= 2 else 60.0)
+        n_ok, n_fail = sum(p.n_ok for p in minutes), sum(p.n_fail for p in minutes)
+        n = n_ok + n_fail
+        rtt_count = sum(p.n_ok for p in minutes if p.rtt_avg is not None)
+        summary = {
+            "rtt_min": min((p.rtt_min for p in minutes if p.rtt_min is not None), default=None),
+            "rtt_avg": (sum(p.rtt_avg * p.n_ok for p in minutes if p.rtt_avg is not None) / rtt_count
+                        if rtt_count else None),
+            "rtt_max": max((p.rtt_max for p in minutes if p.rtt_max is not None), default=None),
+            "n_ok": n_ok, "n_fail": n_fail,
+            "loss_pct": (100.0 * n_fail / n) if n else None,
+        }
+        return points, bucket, summary
 
     def events(self, since: float = 0, target_id: str | None = None, limit: int = 500) -> list[Event]:
         q = "SELECT ts, target_id, kind, status, detail, duration_s FROM events WHERE ts >= ?"

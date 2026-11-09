@@ -265,20 +265,14 @@ class HistoryDialog(QDialog):
         t0 = now - span
         h = self.ctrl.history
         if bucket == 0:   # 1 h: surové vzorky z paměti (+ doplnění z DB po restartu)
-            raw = h.raw_series(tid, t0)
-            if len(raw) >= 2:
-                pts = [SeriesPoint(ts, rtt, rtt, rtt, 1 if rtt is not None else 0, 0 if rtt is not None else 1)
-                       for ts, rtt, _st in raw]
-                b = max(1.0, (raw[-1][0] - raw[0][0]) / max(1, len(raw) - 1))
-            else:
-                pts, b = h.series(tid, t0, 60), 60.0
+            pts, b, summ = h.hour_data(tid, t0)
         else:
             pts, b = h.series(tid, t0, bucket), float(bucket)
+            summ = h.summary(tid, t0)
         self.chart.set_data(pts, t0, now, b, self.ctrl.cfg.ping.thresholds)
 
         s = self.ctrl.snapshots.get(tid)
         L = self.stat_labels
-        summ = h.summary(tid, t0)
         L["cur"].setText(fmt_rtt(s.last.rtt_ms) if s and s.last and s.last.ok else
                          (s.last.status.value.upper() if s and s.last else "–"))
         L["min"].setText(fmt_rtt(summ["rtt_min"]))
