@@ -167,7 +167,7 @@ def test_minimized_start(qapp, cfg, controller_factory, monkeypatch, caplog, sou
 
 
 @pytest.mark.parametrize("kind,critical", [("down", True), ("up", False), ("wan_change", False)])
-def test_notification_without_tray(cfg, controller_factory, caplog, kind, critical):
+def test_notification_without_tray(qapp, cfg, controller_factory, caplog, kind, critical):
     """Regrese L18: upozornění se bez tray zaznamená a dočasně zvýrazní ve widgetu."""
     c = controller_factory(cfg)
     w = MainWidget(c)
@@ -176,22 +176,24 @@ def test_notification_without_tray(cfg, controller_factory, caplog, kind, critic
     try:
         with caplog.at_level(logging.INFO):
             c.notification.emit(n)
+        qapp.processEvents()
         assert w.notification_notice.isVisible()
         assert w.notification_notice.textFormat() == Qt.TextFormat.PlainText
         assert n.title in w.notification_notice.text() and n.message in w.notification_notice.text()
         assert any(n.title in r.message and n.message in r.message for r in caplog.records)
         assert w._notification_timer.isActive()
-        # Další zpráva obnoví jeden časovač, starší timeout ji neschová předčasně.
+        # Méně závažná zpráva nesmí přepsat právě zobrazený výpadek.
         c.notification.emit(Notification("up", "test", "Obnoveno", "192.0.2.1 odpovídá"))
-        assert "Obnoveno" in w.notification_notice.text()
+        qapp.processEvents()
+        assert (n.title if critical else "Obnoveno") in w.notification_notice.text()
         w._notification_timer.timeout.emit()
         assert w.notification_notice.isHidden()
     finally:
         w.close()
 
 
-def test_notification_batch_count_expires(cfg, controller_factory):
-    """Regrese L34 review: dávka upozornění ukáže poslední i počet dalších do vypršení okna."""
+def test_notification_batch_count_expires(qapp, cfg, controller_factory):
+    """Regrese L34 review: dávka jednoho ticku ukáže hlavní zprávu a počet nezobrazených."""
     c = controller_factory(cfg)
     w = MainWidget(c)
     w.show()
@@ -200,15 +202,62 @@ def test_notification_batch_count_expires(cfg, controller_factory):
         w._notification_timer.setInterval(10)
         for title in ("První", "Druhé", "Poslední"):
             c.notification.emit(Notification("down", title, title, "192.0.2.1 neodpovídá", True))
+        qapp.processEvents()
         assert "Poslední" in w.notification_notice.text()
         assert "(+2 dalších)" in w.notification_notice.text()
         assert "První" not in w.notification_notice.text()
         QTest.qWait(30)
         assert w.notification_notice.isHidden()
         c.notification.emit(Notification("up", "test", "Obnoveno", "192.0.2.1 odpovídá"))
+        qapp.processEvents()
         assert "Obnoveno" in w.notification_notice.text()
         assert "dalších" not in w.notification_notice.text()
         assert w.notification_notice.isVisible()
+    finally:
+        w.close()
+
+
+def test_separate_notification_ticks_do_not_accumulate(qapp, cfg, controller_factory):
+    """Regrese L34 kolo 3: samostatně zobrazené zprávy v dalších ticích nezvyšují počet dalších."""
+    c = controller_factory(cfg)
+    w = MainWidget(c)
+    w.show()
+    try:
+        for title in ("První", "Druhé", "Třetí"):
+            c.notification.emit(Notification("wan_change", title, title, "192.0.2.1"))
+            # Oddělené průchody event loop, stále uvnitř osmi sekund předchozí zprávy.
+            qapp.processEvents()
+            assert title in w.notification_notice.text()
+            assert "dalších" not in w.notification_notice.text()
+            assert w._notification_timer.isActive()
+    finally:
+        w.close()
+
+
+@pytest.mark.parametrize("critical_first", [False, True])
+@pytest.mark.parametrize("separate_ticks", [False, True])
+def test_critical_notification_keeps_priority(qapp, cfg, controller_factory, critical_first, separate_ticks):
+    """Regrese L34 kolo 3: výpadek si zachová hlavní text i barvu před obnovením v témže okně."""
+    c = controller_factory(cfg)
+    w = MainWidget(c)
+    w.show()
+    down = Notification("down", "test", "Výpadek", "192.0.2.1 neodpovídá", True)
+    up = Notification("up", "test", "Obnoveno", "192.0.2.1 odpovídá")
+    try:
+        first, second = (down, up) if critical_first else (up, down)
+        c.notification.emit(first)
+        if separate_ticks:
+            qapp.processEvents()
+        c.notification.emit(second)
+        qapp.processEvents()
+        assert "Výpadek" in w.notification_notice.text()
+        assert "Obnoveno" not in w.notification_notice.text()
+        assert f"color: {c.cfg.appearance.colors.bad}" in w.notification_notice.styleSheet()
+        # Již samostatně zobrazené obnovení se nepočítá; ostatní zůstala bez hlavního místa.
+        if separate_ticks and not critical_first:
+            assert "dalších" not in w.notification_notice.text()
+        else:
+            assert "(+1 dalších)" in w.notification_notice.text()
     finally:
         w.close()
 
