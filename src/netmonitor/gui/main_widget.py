@@ -6,7 +6,7 @@ import sys
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QGuiApplication, QPainter, QPen
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSizePolicy, QVBoxLayout, QWidget
 
 from .. import platform as plat
 from ..core.config import MODE_DESKTOP, MODE_ONTOP, AppConfig
@@ -22,6 +22,47 @@ from .widgets import GlowTitle
 log = logging.getLogger(__name__)
 BASE_W, BASE_H = 600, 850
 MIN_W, MIN_H = 260, 340
+
+
+class _NotificationNotice(QLabel):
+    """Dva zkrácené řádky; počet dalších zpráv má přednost před dlouhým názvem."""
+
+    def __init__(self):
+        super().__init__()
+        self._title = self._message = ""
+        self._additional = 0
+        self.critical = False
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+
+    def set_notification(self, n: Notification, additional: int) -> None:
+        self._title = " ".join(n.title.split())
+        self._message = " ".join(n.message.split())
+        self._additional = additional
+        self.critical = n.critical
+        self._refresh_text()
+
+    def set_style(self, scale: float, color: str) -> None:
+        self.setFont(theme.font("body", 16, scale=scale))
+        padding = max(1, round(4 * scale))
+        self.setStyleSheet(f"QLabel {{ color: {color}; background: {theme.GLASS_BOTTOM.name()}; "
+                          f"border: 1px solid {color}; padding: {padding}px; }}")
+        self.setMaximumHeight(2 * self.fontMetrics().lineSpacing() + 2 * padding + 2)
+        self._refresh_text()
+
+    def _refresh_text(self) -> None:
+        fm = self.fontMetrics()
+        width = max(0, self.contentsRect().width())
+        suffix = f" (+{self._additional} dalších)" if self._additional else ""
+        title = fm.elidedText(self._title, Qt.TextElideMode.ElideRight,
+                             max(0, width - fm.horizontalAdvance(suffix)))
+        message = fm.elidedText(self._message, Qt.TextElideMode.ElideRight, width)
+        self.setText(f"{title}{suffix}\n{message}")
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._refresh_text()
 
 
 class ResizeGrip(QWidget):
@@ -84,6 +125,7 @@ class MainWidget(QWidget):
         self._press_pos: QPoint | None = None
         self._dragging = False
         self._win_offset = QPoint()
+        self._notification_count = 0
         self.platform_notice = ""
         self.update_version: str | None = None
 
@@ -93,9 +135,7 @@ class MainWidget(QWidget):
         lay = QVBoxLayout(self)
         lay.setSpacing(2)
         lay.addWidget(self.title)
-        self.notification_notice = QLabel()
-        self.notification_notice.setTextFormat(Qt.TextFormat.PlainText)
-        self.notification_notice.setWordWrap(True)
+        self.notification_notice = _NotificationNotice()
         self.notification_notice.hide()
         lay.addWidget(self.notification_notice)
         lay.addWidget(self.net)
@@ -109,7 +149,7 @@ class MainWidget(QWidget):
         self._notification_timer = QTimer(self)
         self._notification_timer.setSingleShot(True)
         self._notification_timer.setInterval(8000)
-        self._notification_timer.timeout.connect(self.notification_notice.hide)
+        self._notification_timer.timeout.connect(self._expire_notifications)
 
         ctrl.target_result.connect(lambda s, r: self.ping.update_snapshot(s))
         ctrl.targets_changed.connect(lambda: self.ping.set_targets(self.ctrl.cfg, self.ctrl.snapshots))
@@ -138,6 +178,7 @@ class MainWidget(QWidget):
         self.title.set_style(s, a.neon_effects)
         self.net.apply_style(cfg, s)
         self.ping.apply_style(cfg, s)
+        self._style_notification_notice()
         self.ping.set_targets(cfg, self.ctrl.snapshots)
         self.grip.setVisible(not a.locked)
         self.setWindowOpacity(a.opacity)
@@ -155,12 +196,19 @@ class MainWidget(QWidget):
         if self.ctrl.tray_available:
             return
         log.log(logging.WARNING if n.critical else logging.INFO, "%s: %s", n.title, n.message)
-        self.notification_notice.setText(f"{n.title}\n{n.message}")
-        color = self.ctrl.cfg.appearance.colors.bad if n.critical else self.ctrl.cfg.appearance.colors.warn
-        self.notification_notice.setStyleSheet(
-            f"QLabel {{ color: {color}; background: #081e3a; border: 1px solid {color}; padding: 6px; }}")
+        self._notification_count += 1
+        self.notification_notice.set_notification(n, self._notification_count - 1)
+        self._style_notification_notice()
         self.notification_notice.show()
         self._notification_timer.start()
+
+    def _expire_notifications(self) -> None:
+        self.notification_notice.hide()
+        self._notification_count = 0
+
+    def _style_notification_notice(self) -> None:
+        colors = self.ctrl.cfg.appearance.colors
+        self.notification_notice.set_style(self._scale, colors.bad if self.notification_notice.critical else colors.warn)
 
     def _apply_window_flags(self, cfg: AppConfig) -> None:
         a = cfg.appearance
@@ -327,6 +375,7 @@ class MainWidget(QWidget):
             self.title.set_style(s, cfg.appearance.neon_effects)
             self.net.apply_style(cfg, s)
             self.ping.apply_style(cfg, s)
+            self._style_notification_notice()
         self._geom_timer.start()
 
     def moveEvent(self, e):
