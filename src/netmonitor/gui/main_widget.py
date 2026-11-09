@@ -6,11 +6,12 @@ import sys
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QCursor, QGuiApplication, QPainter, QPen
-from PySide6.QtWidgets import QApplication, QMenu, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
 
 from .. import platform as plat
 from ..core.config import MODE_DESKTOP, MODE_ONTOP, AppConfig
 from ..core.connection_status import ConnEvaluation
+from ..core.notifier import Notification
 from . import theme
 from .controller import Controller
 from .i18n import tr
@@ -92,6 +93,11 @@ class MainWidget(QWidget):
         lay = QVBoxLayout(self)
         lay.setSpacing(2)
         lay.addWidget(self.title)
+        self.notification_notice = QLabel()
+        self.notification_notice.setTextFormat(Qt.TextFormat.PlainText)
+        self.notification_notice.setWordWrap(True)
+        self.notification_notice.hide()
+        lay.addWidget(self.notification_notice)
         lay.addWidget(self.net)
         lay.addWidget(self.ping, 1)
         self._layout = lay
@@ -100,12 +106,17 @@ class MainWidget(QWidget):
 
         self._geom_timer = QTimer(self, singleShot=True, interval=700, timeout=self.remember_geometry)
         self._bottom_timer = QTimer(self, singleShot=True, interval=50, timeout=self._push_to_bottom)
+        self._notification_timer = QTimer(self)
+        self._notification_timer.setSingleShot(True)
+        self._notification_timer.setInterval(8000)
+        self._notification_timer.timeout.connect(self.notification_notice.hide)
 
         ctrl.target_result.connect(lambda s, r: self.ping.update_snapshot(s))
         ctrl.targets_changed.connect(lambda: self.ping.set_targets(self.ctrl.cfg, self.ctrl.snapshots))
         ctrl.network_updated.connect(lambda s: self.net.update_network(s, self.ctrl.cfg.network.show_ipv6))
         ctrl.wan_updated.connect(self.net.update_wan)
         ctrl.connection_changed.connect(self._on_connection)
+        ctrl.notification.connect(self._on_notification)
         ctrl.config_changed.connect(self.apply_config)
 
         self.apply_config(ctrl.cfg, initial=True)
@@ -138,6 +149,18 @@ class MainWidget(QWidget):
 
     def _on_connection(self, ev: ConnEvaluation) -> None:
         self.net.update_connection(ev, self.ctrl.cfg.appearance.colors)
+
+    def _on_notification(self, n: Notification) -> None:
+        """Bez tray zobrazí krátkou zprávu ve widgetu a uchová ji v lokálním logu."""
+        if self.ctrl.tray_available:
+            return
+        log.log(logging.WARNING if n.critical else logging.INFO, "%s: %s", n.title, n.message)
+        self.notification_notice.setText(f"{n.title}\n{n.message}")
+        color = self.ctrl.cfg.appearance.colors.bad if n.critical else self.ctrl.cfg.appearance.colors.warn
+        self.notification_notice.setStyleSheet(
+            f"QLabel {{ color: {color}; background: #081e3a; border: 1px solid {color}; padding: 6px; }}")
+        self.notification_notice.show()
+        self._notification_timer.start()
 
     def _apply_window_flags(self, cfg: AppConfig) -> None:
         a = cfg.appearance
@@ -431,7 +454,7 @@ class MainWidget(QWidget):
     def build_menu(self, parent=None, for_tray: bool = False) -> QMenu:
         m = QMenu(parent)
         m.setStyleSheet(theme.DIALOG_QSS)
-        if for_tray:
+        if for_tray and self.ctrl.tray_available:
             act = m.addAction("")
             act.setData(("visibility",))
             act.triggered.connect(self.toggle_visible)
@@ -480,8 +503,8 @@ class MainWidget(QWidget):
             sz.addAction(label, lambda w=w, h=h: self.set_size(w, h))
         m.addSeparator()
         m.addAction(tr("Obnovit nyní"), self.refresh_now)
-        if not for_tray:
-            m.addAction(tr("Skrýt do oznamovací oblasti"), self.hide)
+        if not for_tray and self.ctrl.tray_available:
+            m.addAction(tr("Skrýt do oznamovací oblasti"), self.toggle_visible)
         m.addSeparator()
         m.addAction(tr("O aplikaci…"), self.open_about.emit)
         m.addAction(tr("Ukončit"), self.quit_requested.emit)
@@ -572,7 +595,8 @@ class MainWidget(QWidget):
                 act.setChecked(a.locked)
             elif key == "click_through":
                 act.setChecked(a.click_through)
-                act.setEnabled(data[1] or not a.click_through)
+                # Bez tray nelze click-through vypnout jinak než z menu ikony – nezapínat ho vůbec.
+                act.setEnabled(self.ctrl.tray_available and (data[1] or not a.click_through))
             elif key == "glass_alpha":
                 act.setChecked(abs(a.glass_alpha - data[1]) < 0.01)
             elif key == "profiles":
@@ -589,9 +613,6 @@ class MainWidget(QWidget):
         self.ctrl.update_config(cfg)
 
     def _set_click_through(self, v: bool) -> None:
-        if v and not QApplication.instance().property("tray_available"):
-            log.warning("Click-through bez tray ikony nelze bezpečně vypnout – ignoruji")
-            return
         self._set_appearance(click_through=v)
 
     def refresh_now(self) -> None:
@@ -601,7 +622,10 @@ class MainWidget(QWidget):
 
     def toggle_visible(self) -> None:
         if self.isVisible():
-            self.hide()
+            if self.ctrl.tray_available:
+                self.hide()
+            else:
+                log.warning("Oznamovací oblast nedostupná – widget zůstává viditelný")
         else:
             self.show()
             self.raise_() if self.ctrl.cfg.appearance.mode == MODE_ONTOP else None
