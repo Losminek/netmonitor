@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication
 
 from netmonitor.core import config as cfgmod
 from netmonitor.core.config import AppConfig, PingTarget
+from netmonitor.core.ipconfig import IpSettings
 from netmonitor.core.ping_engine import PingResult, PingStatus
 from netmonitor.gui import controller as cmod
 from netmonitor.utils.workers import DaemonPool
@@ -166,7 +167,7 @@ def test_shutdown_waits_for_running_ip_sequence(ctrl, monkeypatch, caplog):
         return True, "Test"
 
     monkeypatch.setattr(plat, "current", lambda: SimpleNamespace(apply_ip=apply))
-    ctrl.apply_ip(object(), lambda _res: pytest.fail("Callback při shutdownu"))
+    ctrl.apply_ip(IpSettings(iface="test0"), lambda _res: pytest.fail("Callback při shutdownu"))
     assert entered.wait(2)
     timer = threading.Timer(0.1, release.set)
     timer.start()
@@ -198,7 +199,7 @@ def test_shutdown_cancels_queued_work_and_saves(ctrl, monkeypatch):
         for i, event in enumerate(entered):
             ctrl._run_bg(f"blocked-{i}", lambda event=event: hang(event))
         assert all(event.wait(2) for event in entered)
-        ctrl.apply_ip(object(), calls.append)
+        ctrl.apply_ip(IpSettings(iface="test0"), calls.append)
         ctrl.cfg.appearance.locked = True
         ctrl.schedule_save()
         ctrl._save_now()  # zápis teprve čeká ve frontě
