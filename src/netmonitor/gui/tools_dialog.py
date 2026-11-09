@@ -124,7 +124,7 @@ class TracerouteDialog(QDialog):
     def _finished(self, ip, err: str) -> None:
         # Signál může GUI převzít ještě před návratem workeru z emit().
         if self.busy():
-            QTimer.singleShot(10, lambda: self._finished(ip, err))
+            QTimer.singleShot(10, self, lambda: self._finished(ip, err))
             return
         self.btn_run.setEnabled(True)
         reached = any(h.reached for h in self.hops)
