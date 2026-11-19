@@ -121,7 +121,8 @@ def test_dialog_entry_points_use_activation(ctrl, monkeypatch, kind):
     finally:
         for dialog in opened:
             dialog.close()
-            if kind == "traceroute":
+            # Po #20 (L32) se okno traceroute z _trace_dialogs odebírá samo při zavření.
+            if kind == "traceroute" and dialog in tools_dialog._trace_dialogs:
                 tools_dialog._trace_dialogs.remove(dialog)
                 dialog.deleteLater()
 
