@@ -86,7 +86,7 @@ class SyncClient:
         except HTTPError as exc:
             raise self._http_error(exc) from exc
         except (URLError, TimeoutError, OSError) as exc:
-            raise SyncError(f"Server není dostupný: {getattr(exc, 'reason', exc)}") from exc
+            raise SyncError(f"Server není dostupný: {getattr(exc, 'reason', exc)}", code="network_error") from exc
         except (UnicodeError, ValueError) as exc:
             raise SyncError("Server vrátil neplatnou odpověď") from exc
 

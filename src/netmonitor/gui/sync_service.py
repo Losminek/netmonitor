@@ -61,6 +61,7 @@ class SyncService(QObject):
         self.remember = True
         self.errors: list[str] = []
         self.pending_conflicts: list = []
+        self._resume_pending = False       # obnova uložené relace odložená kvůli síti
         self._again = False
         self._resolutions: dict[str, str] = {}
         self._asked: set = set()            # konflikty, na které už byl uživatel dotázán
@@ -178,14 +179,22 @@ class SyncService(QObject):
             return
         _server, email, token = stored
         self.settings["email"] = email
+        self._resume(token)
 
+    def _resume(self, token: str) -> None:
         def done(result):
             if isinstance(result, Exception):
-                if self.client.refresh_token:       # jen výpadek spojení – zkusíme později
+                self._resume_pending = (isinstance(result, SyncError) and result.code == "network_error"
+                                        and bool(self.client.refresh_token))
+                if self._resume_pending:
                     self._set_status(f"Server není dostupný, pracuji offline. ({result})")
                     self._periodic.start()
                 else:
-                    self._set_status("Přihlášení vypršelo. Přihlaste se znovu v Nastavení → Účet.")
+                    self._periodic.stop()
+                    if isinstance(result, SyncError) and result.status == 401:
+                        self._set_status("Přihlášení vypršelo. Přihlaste se znovu v Nastavení → Účet.")
+                    else:
+                        self._set_status(f"Přihlášení nelze obnovit: {result}")
                 return
             self._logged_in()
 
@@ -218,11 +227,13 @@ class SyncService(QObject):
             done(SyncError("Probíhá jiná operace, zkuste to za okamžik."))
 
     def _logged_in(self) -> None:
+        self._resume_pending = False
         self._periodic.start()
         self._set_status(f"Přihlášeno jako {self.client.email}.")
         self.sync_now()
 
     def logout(self) -> None:
+        self._resume_pending = False
         self._periodic.stop()
         self._debounce.stop()
         client = self.client
@@ -253,7 +264,13 @@ class SyncService(QObject):
 
     def sync_now(self) -> None:
         store = self.ctrl.profile_store
-        if store is None or not self.logged_in or self.ctrl._stopping:
+        if store is None or self.ctrl._stopping:
+            return
+        if self._resume_pending and self.client.refresh_token:
+            if not self.busy:
+                self._resume(self.client.refresh_token)
+            return
+        if not self.logged_in:
             return
         if self.busy:
             self._again = True
