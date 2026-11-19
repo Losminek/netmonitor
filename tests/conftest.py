@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 from pathlib import Path
@@ -13,3 +14,6 @@ def _isolated_home(tmp_path, monkeypatch):
     """Každý test má vlastní konfigurační/datový adresář – nikdy nesahá na skutečná data."""
     monkeypatch.setenv("NETMONITOR_HOME", str(tmp_path / "nmhome"))
     yield
+    # Až po shutdown ve fixturách: Controller/SyncService s QTimer tvoří cykly.
+    # Uvolnit je zde, ne automatickým GC uprostřed processEvents dalšího testu.
+    gc.collect()
