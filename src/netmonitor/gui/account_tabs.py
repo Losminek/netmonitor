@@ -97,13 +97,18 @@ def ask_conflicts(sync, conflicts, parent=None) -> None:
         box = QMessageBox(parent)
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle("NetMonitor – konflikt profilu")
-        box.setText(f"Profil „{action.name}“ se změnil na tomto počítači i na serveru.")
-        box.setInformativeText(f"Verze na serveru je z {when((action.remote or {}).get('updated_at'))}. "
-                               "Kterou verzi chcete zachovat?")
+        box.setText(f"Profil „{action.name}“ má na tomto počítači a na serveru rozdílné verze.")
+        box.setInformativeText(f"Verze na serveru je z {when((action.remote or {}).get('updated_at'))}.\n\n"
+                               "Nahrání verze z tohoto počítače přepíše verzi na serveru i pro ostatní počítače. "
+                               "Použití verze ze serveru přepíše místní verzi na tomto počítači.\n\n"
+                               "„Rozhodnu později“ nic nepřepíše. Ke konfliktu se můžete vrátit v Nastavení "
+                               "→ Profily → Vyřešit konflikty…")
         local = box.addButton("Nahrát verzi z tohoto počítače", QMessageBox.ButtonRole.AcceptRole)
         remote = box.addButton("Použít verzi ze serveru", QMessageBox.ButtonRole.DestructiveRole)
         both = box.addButton("Ponechat obě", QMessageBox.ButtonRole.ActionRole)
-        box.addButton("Rozhodnu později", QMessageBox.ButtonRole.RejectRole)
+        later = box.addButton("Rozhodnu později", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(later)
+        box.setEscapeButton(later)
         box.exec()
         clicked = box.clickedButton()
         choice = next((value for button, value in ((local, sync_engine.KEEP_LOCAL),
