@@ -9,7 +9,9 @@
 - Přepnutí: pravé tlačítko na widgetu nebo na ikoně v liště → **Profil**, případně Nastavení → Profily.
 - Úpravy v ostatních kartách Nastavení se ukládají do aktivního profilu.
 - Přepnutí nemění IP adresu počítače; uloženou IP/DNS předvolbu použijete v dialogu Nastavit IP adresu.
-- Poloha a velikost okna a vybraná síťová karta patří počítači, ne profilu.
+- Vzhled a poloha okna, síťová karta, externí dotazy, jazyk, autostart, aktualizace a historie
+  patří počítači. Přepnutí přebírá jen stejné části jako synchronizace: ping cíle a prahy,
+  upozornění a IP/DNS předvolby včetně předvolby nabídnuté při přepnutí.
 - Stávající konfigurace se při prvním spuštění převede do profilu „Soukromý“.
 
 ## Automatika (Nastavení → Profily)

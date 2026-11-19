@@ -21,6 +21,7 @@ from ..core.monitoring import MonitorEngine, TargetSnapshot, Transition
 from ..core.network_info import NetworkInfoProvider, NetworkSnapshot
 from ..core.notifier import Notification, Notifier
 from ..core.ping_engine import PingResult, Resolver, select_pinger
+from ..core.sync_config import merge_shared
 from ..core.wan_info import WanState, fetch_wan_ip
 from ..utils.paths import data_dir
 from ..utils.validation import host_kind, is_private_address
@@ -197,12 +198,8 @@ class Controller(QObject):
             self.ip_preset_offered.emit(self.cfg.network.switch_ip_profile)
 
     def apply_profile_config(self, cfg: AppConfig) -> None:
-        """Použije obsah profilu, ale ponechá věci patřící tomuto počítači (poloha a velikost okna)."""
-        a, mine = cfg.appearance, self.cfg.appearance
-        for key in ("x", "y", "width", "height"):
-            if hasattr(mine, key):
-                setattr(a, key, getattr(mine, key))
-        self.update_config(cfg)
+        """Použije stejné sdílené části jako synchronizace; místní volby počítače zachová."""
+        self.update_config(merge_shared(cfg.to_dict(), self.cfg))
         self._save_timer.stop()
         self._save_now()
 
