@@ -27,6 +27,7 @@ class Server:
         self.offline = False
         self.revoked = False
         self.invalid_response = False
+        self.server_error = None        # např. 503/429 – přechodná chyba serveru
         self.attempts = 0
         self.requests = []
         self.uploaded = None
@@ -41,6 +42,8 @@ class Server:
         if path == "/auth/refresh":
             if self.revoked:
                 raise HTTPError(req.full_url, 401, "revoked", Message(), None)
+            if self.server_error:
+                raise HTTPError(req.full_url, self.server_error, "busy", Message(), None)
             if self.invalid_response:
                 return Response({})
             assert json.loads(req.data)["refresh_token"] == "saved-refresh"
@@ -193,3 +196,36 @@ def test_invalid_response_does_not_schedule_retry(service, server):
     service.sync_now()
     service._periodic.timeout.emit()
     assert server.requests == [] and not service.busy
+
+
+@pytest.mark.parametrize("status", [502, 503, 429])
+def test_transient_server_error_keeps_retrying(service, server, status):
+    """Chyba serveru při obnově (údržba, proxy, limit) opakování nezastaví (review L38)."""
+    save_session(service)
+    server.server_error = status
+    service.start()
+    wait_idle(service)
+    assert not service.logged_in and service.resume_pending
+    assert service._periodic.isActive() and service.secrets.load() is not None
+
+    server.server_error = None
+    service.sync_now()
+    wait_idle(service)
+    assert service.logged_in and not service.resume_pending
+    assert server.uploaded is not None
+
+
+def test_logout_discards_late_resume_result(service, server, monkeypatch):
+    """Výsledek obnovy doručený až po odhlášení relaci znovu nepřihlásí (review L38)."""
+    save_session(service)
+    pending = []
+    monkeypatch.setattr(service.ctrl, "_run_bg", lambda key, fn, done=None: pending.append((fn, done)))
+    service.start()
+    assert pending
+    fn, done = pending.pop()
+    service.busy = False
+    service.logout()
+    done(fn())
+    assert not service.logged_in and not service.resume_pending
+    assert not service._periodic.isActive()
+    assert service.client.refresh_token is None and service.secrets.load() is None

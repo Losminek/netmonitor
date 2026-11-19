@@ -271,7 +271,8 @@ class ProfilesTab(QWidget):
         self.net_label.setText(identity[1] if identity else "nerozpoznána (bez připojení, nebo brána neodpovídá)")
         self.btn_bind.setEnabled(identity is not None and selected(self.table) is not None)
         online = sync is not None and sync.logged_in
-        self.btn_sync.setEnabled(online)
+        # Při čekající obnově relace jde synchronizaci (= nový pokus o obnovu) spustit ručně.
+        self.btn_sync.setEnabled(online or (sync is not None and sync.resume_pending))
         self.btn_conflicts.setVisible(online and bool(sync.pending_conflicts))
         detached = False
         pid = selected(self.table)
@@ -433,7 +434,7 @@ class AccountTab(QWidget):
         for widget in (self.server, self.email, self.password, self.code, self.license, self.remember,
                        self.btn_login, self.btn_register):
             widget.setEnabled(not logged and not sync.busy)
-        self.btn_logout.setEnabled(logged)
+        self.btn_logout.setEnabled(logged or sync.resume_pending)   # zapomenout účet i bez spojení
         self.btn_password.setEnabled(logged)
         if logged:
             self.email.setText(sync.client.email)

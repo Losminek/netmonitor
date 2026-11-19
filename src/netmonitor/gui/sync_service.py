@@ -61,7 +61,8 @@ class SyncService(QObject):
         self.remember = True
         self.errors: list[str] = []
         self.pending_conflicts: list = []
-        self._resume_pending = False       # obnova uložené relace odložená kvůli síti
+        self._resume_pending = False       # obnova uložené relace odložená kvůli síti/výpadku serveru
+        self._resume_gen = 0               # odhlášení zneplatní výsledek rozběhnuté obnovy
         self._again = False
         self._resolutions: dict[str, str] = {}
         self._asked: set = set()            # konflikty, na které už byl uživatel dotázán
@@ -181,11 +182,31 @@ class SyncService(QObject):
         self.settings["email"] = email
         self._resume(token)
 
+    @property
+    def resume_pending(self) -> bool:
+        """Uložená relace čeká na obnovu (server zatím nedostupný)."""
+        return self._resume_pending
+
+    @staticmethod
+    def _transient(exc: Exception) -> bool:
+        """Výpadek sítě, chyba serveru (5xx) nebo omezení (429) – obnovu má smysl zopakovat."""
+        if not isinstance(exc, SyncError):
+            return False
+        return exc.code == "network_error" or (exc.status is not None and (exc.status >= 500 or exc.status == 429))
+
     def _resume(self, token: str) -> None:
+        gen = self._resume_gen
+        client = self.client                    # klient zachycený při spuštění obnovy
+
         def done(result):
+            if gen != self._resume_gen:
+                # Mezitím odhlášeno: obnova na pozadí mohla klientovi vrátit tokeny – znovu je zahodit.
+                client.access_token = client.refresh_token = client.user = None
+                client.mfa = False
+                self.secrets.clear()
+                return
             if isinstance(result, Exception):
-                self._resume_pending = (isinstance(result, SyncError) and result.code == "network_error"
-                                        and bool(self.client.refresh_token))
+                self._resume_pending = self._transient(result) and bool(self.client.refresh_token)
                 if self._resume_pending:
                     self._set_status(f"Server není dostupný, pracuji offline. ({result})")
                     self._periodic.start()
@@ -198,7 +219,7 @@ class SyncService(QObject):
                 return
             self._logged_in()
 
-        self._job("resume", lambda: self.client.resume(token), done)
+        self._job("resume", lambda: client.resume(token), done)
 
     def login(self, email: str, password: str, code: str | None, remember: bool,
               done: Callable[[SyncError | None], None]) -> None:
@@ -234,6 +255,7 @@ class SyncService(QObject):
 
     def logout(self) -> None:
         self._resume_pending = False
+        self._resume_gen += 1
         self._periodic.stop()
         self._debounce.stop()
         client = self.client
