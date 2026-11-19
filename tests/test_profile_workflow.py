@@ -191,6 +191,83 @@ def test_conflict_prompt_resolves_with_user_choice(env, server, monkeypatch):
     assert ctrl.cfg.ping.targets[0].host == "10.7.7.7" and not sync.pending_conflicts
 
 
+@pytest.mark.parametrize("dismiss", ["enter", "escape", "later", "close"])
+def test_conflict_can_be_deferred_and_reopened(env, monkeypatch, qapp, dismiss):
+    from copy import deepcopy
+    from unittest.mock import Mock
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from netmonitor.core import sync_engine
+
+    ctrl, store = env
+    sync = ctrl.sync
+    cfg = ctrl.cfg.copy()
+    cfg.ping.targets = [PingTarget("Test", "192.0.2.1", id="test")]
+    ctrl.update_config(cfg)
+    ctrl._save_timer.stop()
+    ctrl._save_now()
+    # Relace a konflikt bez HTTP; testuje se dialog a skutečná fronta SyncService.
+    sync.client.access_token = "test-token"
+    sync.client.user = {"email": "user@example.com"}
+    sync.pending_conflicts = [sync_engine.Action("conflict", store.active_id(),
+        {"id": "remote", "revision": 3, "updated_at": "2026-11-19T12:00:00+00:00"}, name="Soukromý")]
+    pending = list(sync.pending_conflicts)
+    before = store.load(store.active_id()).to_dict()
+    remote_before = deepcopy(pending[0].remote)
+    resolve = Mock(wraps=sync.resolve)
+    sync_now = Mock()
+    monkeypatch.setattr(sync, "resolve", resolve)
+    monkeypatch.setattr(sync, "sync_now", sync_now)
+    seen = {}
+
+    def dismiss_dialog(box):
+        box.show()
+        qapp.processEvents()
+        seen["default"] = next((b.text() for b in box.buttons() if b.isDefault()), None)
+        seen["escape"] = box.escapeButton().text() if box.escapeButton() else None
+        try:
+            if dismiss in ("enter", "escape"):
+                key = Qt.Key.Key_Return if dismiss == "enter" else Qt.Key.Key_Escape
+                QTest.keyClick(box, key)
+            elif dismiss == "later":
+                next(b for b in box.buttons() if b.text() == "Rozhodnu později").click()
+            else:
+                box.close()
+            seen["closed"] = not box.isVisible()
+            return 0
+        finally:
+            box.hide()
+
+    monkeypatch.setattr(QMessageBox, "exec", dismiss_dialog)
+    account_tabs.ask_conflicts(sync, pending)
+    assert seen == {"default": "Rozhodnu později", "escape": "Rozhodnu později", "closed": True}
+    assert sync.pending_conflicts == pending and not sync._resolutions
+    resolve.assert_not_called()
+    sync_now.assert_not_called()
+    assert store.load(store.active_id()).to_dict() == before
+    assert ctrl.cfg.ping.targets[0].host == "192.0.2.1"
+    assert pending[0].remote == remote_before
+
+    # Odložený konflikt jde znovu otevřít z karty Profily a výslovně vyřešit.
+    tab = account_tabs.ProfilesTab(ctrl)
+    try:
+        assert not tab.btn_conflicts.isHidden()
+
+        def choose_remote(box):
+            next(b for b in box.buttons() if b.text() == "Použít verzi ze serveru").click()
+            return 0
+
+        monkeypatch.setattr(QMessageBox, "exec", choose_remote)
+        tab.btn_conflicts.click()
+        resolve.assert_called_once_with(store.active_id(), sync_engine.KEEP_REMOTE)
+        sync_now.assert_called_once_with()
+        assert not sync.pending_conflicts
+    finally:
+        tab.close()
+
+
 def test_register_with_license_key_and_admin_tab(env, server, monkeypatch):
     ctrl, store = env
     secret = server.add_admin()
