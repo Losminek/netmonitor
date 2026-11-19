@@ -1,7 +1,8 @@
 """Propojení jádra s Qt: plánování úloh na pozadí, signály pro UI, ukládání konfigurace.
 
-Za běhu probíhá I/O v pozadí a výsledky se do UI doručují queued signály.
-Při ukončení se poslední konfigurace uloží synchronně před rušením úloh.
+Za běhu probíhá síťové I/O v pozadí a výsledky se do UI doručují queued signály.
+Konfigurace (malý atomický JSON) se zapisuje synchronně kvůli přepínání profilů;
+při ukončení se poslední revize uloží před rušením úloh.
 """
 from __future__ import annotations
 
@@ -62,7 +63,6 @@ class Controller(QObject):
         self._busy: set[str] = set()
         self._stopping = False
         self._ip_future: Future | None = None
-        self._save_lock = threading.Lock()
         self._save_generation = 0
         self._saved_generation = 0
         self._history_jobs: list[Future] = []
@@ -258,17 +258,16 @@ class Controller(QObject):
             log.exception("Zápis konfigurace selhal; revize zůstává neuložená")
 
     def _write_config(self, cfg: AppConfig, generation: int) -> None:
-        """Serializace atomických zápisů; starší snapshot nesmí přepsat novější.
+        """Zapíše revizi do config.json i do aktivního profilu (jen hlavní vlákno).
 
-        Zapisuje config.json i aktivní profil, aby se poslední změna neztratila ani při ukončení.
+        Už uloženou revizi nezapisuje znovu; při chybě zůstane revize neuložená.
         """
-        with self._save_lock:
-            if generation <= self._saved_generation:
-                return
-            cfgmod.save_config(cfg, self.config_path)
-            if self.profile_store is not None:
-                self.profile_store.save_active(cfg)
-            self._saved_generation = generation
+        if generation <= self._saved_generation:
+            return
+        cfgmod.save_config(cfg, self.config_path)
+        if self.profile_store is not None:
+            self.profile_store.save_active(cfg)
+        self._saved_generation = generation
 
     def switch_profile(self, profile_id: str) -> None:
         """Přepne aktivní profil (cíle, upozornění, IP/DNS předvolby). Vyhazuje ValueError/OSError."""
