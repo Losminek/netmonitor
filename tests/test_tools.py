@@ -13,6 +13,9 @@ import pytest
 from netmonitor.core import speedtest, traceroute, wol
 from netmonitor.core.config import PingTarget
 
+# Skutečná třída; autouse pojistka v conftest (#14) nahrazuje subprocess.Popen funkcí.
+REAL_POPEN = subprocess.Popen
+
 
 # ---------------------------------------------------------------- Wake-on-LAN
 @pytest.mark.parametrize("txt", ["04:D9:F5:15:34:86", "04-d9-f5-15-34-86", "04d9.f515.3486", "04d9f5153486",
@@ -221,7 +224,7 @@ def test_traceroute_stop_finished_process_skips_killpg(monkeypatch):
 @pytest.mark.parametrize("failed_signal", ["SIGTERM", "SIGKILL"])
 def test_traceroute_stop_group_error_falls_back_to_kill(monkeypatch, failed_signal):
     """Regrese L32 review 3: chyba oprávnění killpg použije kill rodiče a vždy wait."""
-    proc = Mock(spec=subprocess.Popen, returncode=None, pid=12345)
+    proc = Mock(spec=REAL_POPEN, returncode=None, pid=12345)
 
     def killpg(pid, sig):
         if sig == getattr(signal, failed_signal):
@@ -236,7 +239,7 @@ def test_traceroute_stop_group_error_falls_back_to_kill(monkeypatch, failed_sign
 @pytest.mark.skipif(sys.platform == "win32", reason="killpg je POSIX scénář")
 def test_traceroute_stop_missing_group_still_waits(monkeypatch):
     """Regrese L32 review 3: zaniklá skupina nepotřebuje fallback kill, wait se ale provede."""
-    proc = Mock(spec=subprocess.Popen, returncode=None, pid=12345)
+    proc = Mock(spec=REAL_POPEN, returncode=None, pid=12345)
     monkeypatch.setattr(traceroute.os, "killpg", Mock(side_effect=ProcessLookupError))
     traceroute._stop_process(proc)
     proc.kill.assert_not_called()
@@ -246,7 +249,7 @@ def test_traceroute_stop_missing_group_still_waits(monkeypatch):
 @pytest.mark.skipif(sys.platform == "win32", reason="killpg je POSIX scénář")
 def test_traceroute_stop_failed_fallback_still_waits(monkeypatch):
     """Regrese L32 review 3: i selhání fallback kill musí projít závěrečným wait."""
-    proc = Mock(spec=subprocess.Popen, returncode=None, pid=12345)
+    proc = Mock(spec=REAL_POPEN, returncode=None, pid=12345)
     proc.kill.side_effect = OSError("kill failed")
     monkeypatch.setattr(traceroute.os, "killpg", Mock(side_effect=PermissionError))
     with pytest.raises(OSError, match="kill failed"):
