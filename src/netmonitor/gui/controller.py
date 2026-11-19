@@ -303,6 +303,9 @@ class Controller(QObject):
     def apply_profile_config(self, cfg: AppConfig) -> None:
         """Použije stejné sdílené části jako synchronizace; místní volby počítače zachová."""
         self.update_config(merge_shared(cfg.to_dict(), self.cfg))
+        # Snapshot nově aktivního profilu se musí zapsat i tehdy, když se běžící konfigurace
+        # nezměnila (např. liší se jen místní volby, které merge_shared ponechá tomuto počítači).
+        self._save_generation += 1
         self._save_timer.stop()
         self._save_now()
 
