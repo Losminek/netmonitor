@@ -161,7 +161,9 @@ class SyncService(QObject):
 
     # ------------------------------------------------------------------ účet
     def _job(self, key: str, fn: Callable[[], object], done: Callable[[object], None]) -> bool:
-        if self.busy:
+        # Úlohu, kterou Controller nespustí (stejný klíč běží, aplikace končí), vůbec nezačínat –
+        # jinak by busy zůstalo nastavené navždy.
+        if self.busy or self.ctrl._stopping or ("sync-" + key) in self.ctrl._busy:
             return False
         self.busy = True
         self._set_status("Komunikuji se serverem…")
