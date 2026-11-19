@@ -61,6 +61,8 @@ class SyncService(QObject):
         self.remember = True
         self.errors: list[str] = []
         self.pending_conflicts: list = []
+        self._resume_pending = False       # obnova uložené relace odložená kvůli síti/výpadku serveru
+        self._resume_gen = 0               # odhlášení zneplatní výsledek rozběhnuté obnovy
         self._again = False
         self._resolutions: dict[str, str] = {}
         self._asked: set = set()            # konflikty, na které už byl uživatel dotázán
@@ -180,18 +182,50 @@ class SyncService(QObject):
             return
         _server, email, token = stored
         self.settings["email"] = email
+        self._resume(token)
+
+    @property
+    def resume_pending(self) -> bool:
+        """Uložená relace čeká na obnovu (server zatím nedostupný)."""
+        return self._resume_pending
+
+    @staticmethod
+    def _transient(exc: Exception) -> bool:
+        """Výpadek sítě, chyba serveru (5xx) nebo omezení (429) – obnovu má smysl zopakovat."""
+        if not isinstance(exc, SyncError):
+            return False
+        return exc.code == "network_error" or (exc.status is not None and (exc.status >= 500 or exc.status == 429))
+
+    def _resume(self, token: str) -> None:
+        gen = self._resume_gen
+        client = self.client                    # klient zachycený při spuštění obnovy
 
         def done(result):
+            if gen != self._resume_gen:
+                # Mezitím odhlášeno: obnova na pozadí mohla klientovi vrátit tokeny – relaci ukončit
+                # i na serveru a tokeny znovu zahodit (tokeny uložené během obnovy smaže secrets.clear()).
+                if client.access_token and not self.ctrl._stopping:
+                    old = SyncClient(client.base_url, access_token=client.access_token)
+                    self.ctrl._run_bg("sync-logout-late", old.logout, lambda _r: None)
+                client.access_token = client.refresh_token = client.user = None
+                client.mfa = False
+                self.secrets.clear()
+                return
             if isinstance(result, Exception):
-                if self.client.refresh_token:       # jen výpadek spojení – zkusíme později
+                self._resume_pending = self._transient(result) and bool(self.client.refresh_token)
+                if self._resume_pending:
                     self._set_status(f"Server není dostupný, pracuji offline. ({result})")
                     self._periodic.start()
                 else:
-                    self._set_status("Přihlášení vypršelo. Přihlaste se znovu v Nastavení → Účet.")
+                    self._periodic.stop()
+                    if isinstance(result, SyncError) and result.status == 401:
+                        self._set_status("Přihlášení vypršelo. Přihlaste se znovu v Nastavení → Účet.")
+                    else:
+                        self._set_status(f"Přihlášení nelze obnovit: {result}")
                 return
             self._logged_in()
 
-        self._job("resume", lambda: self.client.resume(token), done)
+        self._job("resume", lambda: client.resume(token), done)
 
     def login(self, email: str, password: str, code: str | None, remember: bool,
               done: Callable[[SyncError | None], None]) -> None:
@@ -220,11 +254,14 @@ class SyncService(QObject):
             done(SyncError("Probíhá jiná operace, zkuste to za okamžik."))
 
     def _logged_in(self) -> None:
+        self._resume_pending = False
         self._periodic.start()
         self._set_status(f"Přihlášeno jako {self.client.email}.")
         self.sync_now()
 
     def logout(self) -> None:
+        self._resume_pending = False
+        self._resume_gen += 1
         self._periodic.stop()
         self._debounce.stop()
         client = self.client
@@ -255,7 +292,13 @@ class SyncService(QObject):
 
     def sync_now(self) -> None:
         store = self.ctrl.profile_store
-        if store is None or not self.logged_in or self.ctrl._stopping:
+        if store is None or self.ctrl._stopping:
+            return
+        if self._resume_pending and self.client.refresh_token:
+            if not self.busy:
+                self._resume(self.client.refresh_token)
+            return
+        if not self.logged_in:
             return
         if self.busy:
             self._again = True
