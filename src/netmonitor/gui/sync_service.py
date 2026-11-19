@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -23,13 +24,23 @@ log = logging.getLogger(__name__)
 SETTINGS_FILE = "sync.json"
 
 
-def _safe(fn: Callable[[], object]) -> Callable[[], object]:
-    """Očekávané chyby serveru se vracejí jako hodnota (bez výpisu zásobníku do logu)."""
+@dataclass
+class _Result:
+    value: object
+
+
+def _safe(fn: Callable[[], object]) -> Callable[[], _Result]:
+    """Obal doručí i chybu přes Controller, který samotným výjimkám nevolá done."""
     def call():
         try:
-            return fn()
+            return _Result(fn())
         except SyncError as exc:
-            return exc
+            return _Result(exc)
+        except Exception as exc:  # noqa: BLE001 – dokončení musí proběhnout i při neočekávané chybě
+            # Text výjimky i traceback mohou obsahovat heslo, token nebo tělo odpovědi.
+            log.error("Neočekávaná chyba synchronizace (%s)", type(exc).__name__)
+            return _Result(SyncError("Při komunikaci se serverem došlo k neočekávané chybě. "
+                                     "Zkuste to prosím znovu."))
     return call
 
 
@@ -148,14 +159,16 @@ class SyncService(QObject):
 
     # ------------------------------------------------------------------ účet
     def _job(self, key: str, fn: Callable[[], object], done: Callable[[object], None]) -> bool:
-        if self.busy:
+        # Úlohu, kterou Controller nespustí (stejný klíč běží, aplikace končí), vůbec nezačínat –
+        # jinak by busy zůstalo nastavené navždy.
+        if self.busy or self.ctrl._stopping or ("sync-" + key) in self.ctrl._busy:
             return False
         self.busy = True
         self._set_status("Komunikuji se serverem…")
 
-        def finished(result):
+        def finished(result: _Result):
             self.busy = False
-            done(result)
+            done(result.value)
 
         self.ctrl._run_bg("sync-" + key, _safe(fn), finished)
         return True
@@ -228,7 +241,7 @@ class SyncService(QObject):
 
     def run(self, key: str, fn: Callable[[], object], done: Callable[[object], None]) -> None:
         """Obecný požadavek na server na pozadí (správa klíčů, 2FA…). done dostane výsledek nebo výjimku."""
-        self.ctrl._run_bg("sync-x-" + key, _safe(fn), done)
+        self.ctrl._run_bg("sync-x-" + key, _safe(fn), lambda result: done(result.value))
 
     # ------------------------------------------------------------------ synchronizace
     def _local_change(self, *_args) -> None:
