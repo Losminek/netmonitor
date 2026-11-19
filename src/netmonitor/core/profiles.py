@@ -2,6 +2,7 @@
 
 Každý profil je úplný snapshot AppConfig. Aktivní konfigurace zůstává také
 v původním config.json kvůli kompatibilitě se staršími verzemi aplikace.
+Při přepnutí se ze snapshotu použijí jen sdílené části, aktuální místní volby zůstávají.
 """
 from __future__ import annotations
 
