@@ -36,8 +36,10 @@ class Settings:
     rate_general: tuple[int, int] = (240, 60)
     rate_login: tuple[int, int] = (10, 300)
     rate_register: tuple[int, int] = (5, 3600)
-    lock_after_failures: int = 5
-    lock_minutes: int = 15
+    # chybná přihlášení: limit na dvojici IP + e-mail (stejně pro existující i neexistující účet)
+    login_failures: tuple[int, int] = (5, 900)
+    refresh_grace_s: int = 120          # opakované použití právě vyměněného tokenu (ztracená odpověď)
+    admin_mfa_hours: int = 12           # správa vyžaduje kód z autentikátoru zadaný v této době
 
 
 def load() -> Settings:
@@ -63,4 +65,5 @@ def load() -> Settings:
         rate_general=(_int("RATE_GENERAL_PER_MINUTE", 240), 60),
         rate_login=(_int("RATE_LOGIN_PER_5MIN", 10), 300),
         rate_register=(_int("RATE_REGISTER_PER_HOUR", 5), 3600),
+        admin_mfa_hours=max(1, _int("ADMIN_MFA_HOURS", 12)),
     )

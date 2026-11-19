@@ -2,7 +2,7 @@
 # Hodnoty zadejte v části „Environment variables“:
 #   POSTGRES_PASSWORD   dlouhé náhodné heslo databáze      (openssl rand -hex 24)
 #   JWT_SECRET          podpisový klíč, min. 32 znaků       (openssl rand -hex 32)
-# Volitelné: TAG (výchozí latest), API_BIND (výchozí 127.0.0.1:8766), PROXY_NETWORK,
+# Volitelné: TAG (výchozí pevná verze níže), API_BIND (výchozí 127.0.0.1:8766), PROXY_NETWORK,
 #   FORWARDED_ALLOW_IPS, REGISTRATION_ENABLED.
 name: netmonitor-sync
 
@@ -24,7 +24,7 @@ services:
       retries: 10
 
   api:
-    image: ghcr.io/mersl77/netmonitor-sync:${TAG:-latest}
+    image: ghcr.io/mersl77/netmonitor-sync:${TAG:-1.1.0}
     restart: unless-stopped
     depends_on:
       db:
@@ -36,8 +36,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Zadejte POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET:?Zadejte JWT_SECRET}
       REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
-      # Důvěřovat X-Forwarded-For jen od reverzní proxy v sítích Dockeru.
+      # Komu věřit hlavičku X-Forwarded-For: síť reverzní proxy (NPM) a při provozu přes Cloudflare
+      # i jeho rozsahy (https://www.cloudflare.com/ips/). Jinak by všichni klienti sdíleli jeden limit.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.16.0.0/12}
+      ADMIN_MFA_HOURS: ${ADMIN_MFA_HOURS:-12}
     ports:
       - "${API_BIND:-127.0.0.1:8766}:8000"
     networks:

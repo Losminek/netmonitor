@@ -237,22 +237,14 @@ def test_register_with_license_key_and_admin_tab(env, server, monkeypatch):
     d.close()
 
 
-def test_admin_must_enable_totp_in_app(env, server):
-    ctrl, store = env
+def test_admin_without_totp_gets_server_command_not_web_enrollment(env, server):
+    ctrl, _store = env
     server.add_user("admin@example.org", admin=True)
     login(ctrl, "admin@example.org")
     d = dialog(ctrl)
     admin = d.admin_tab
     assert d.tabs.indexOf(admin) >= 0 and not admin.keys_box.isEnabled() and not admin.totp_box.isHidden()
-    admin._totp_setup()
-    secret = admin.totp_secret.text().replace(" ", "")
-    assert len(secret) == 32 and admin._totp_uri.startswith("otpauth://")
-    admin.totp_code.setText("000000")
-    admin._totp_enable()
-    assert "Chyba" in admin.status.text() and not admin.keys_box.isEnabled()
-    admin.totp_code.setText(server.code(secret))
-    admin._totp_enable()
-    assert admin.keys_box.isEnabled() and admin.totp_box.isHidden()
+    assert "app.cli totp-setup admin@example.org" in admin.totp_hint.text()
     d.close()
 
 

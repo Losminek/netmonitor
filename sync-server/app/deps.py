@@ -8,6 +8,8 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from . import security
+from datetime import timedelta
+
 from .models import User, UserSession, aware, now
 
 
@@ -58,11 +60,15 @@ def current_auth(request: Request, authorization: str | None = Header(default=No
     return Auth(user=user, session=session, mfa=bool(session.mfa))
 
 
-def current_admin(auth: Auth = Depends(current_auth)) -> Auth:
+def current_admin(request: Request, auth: Auth = Depends(current_auth)) -> Auth:
     if not auth.user.is_admin:
         raise error(403, "forbidden", "Vyžaduje účet správce.")
     if not auth.user.totp_enabled:
-        raise error(403, "totp_setup_required", "Správce musí nejprve zapnout dvoufázové ověření.")
-    if not auth.mfa:
-        raise error(403, "totp_required", "Přihlaste se znovu s kódem z autentikátoru.")
+        raise error(403, "totp_setup_required", "Správce musí nejprve zapnout dvoufázové ověření "
+                    "příkazem na serveru: python -m app.cli totp-setup <e-mail>")
+    # Správa vyžaduje čerstvě ověřený kód: uložený obnovovací token sám o sobě práva správce nedává.
+    window = timedelta(hours=request.app.state.settings.admin_mfa_hours)
+    mfa_at = aware(auth.session.mfa_at)
+    if not auth.mfa or mfa_at is None or mfa_at < now() - window:
+        raise error(403, "totp_required", "Pro správu se odhlaste a přihlaste znovu s kódem z autentikátoru.")
     return auth

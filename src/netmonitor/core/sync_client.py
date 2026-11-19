@@ -238,8 +238,10 @@ class SyncClient:
             raise ValueError("Neplatný název profilu")
         return self._check_profile(self._request("POST", "/profiles", {"name": name.strip(), "config": config}))
 
-    def delete(self, profile_id: str) -> None:
-        self._request("DELETE", "/profiles/" + str(UUID(profile_id)))
+    def delete(self, profile_id: str, revision: int | None = None) -> None:
+        """S revision server smaže jen tuto verzi; novější změnu z jiného počítače odmítne (409)."""
+        query = f"?revision={int(revision)}" if revision else ""
+        self._request("DELETE", "/profiles/" + str(UUID(profile_id)) + query)
 
     @staticmethod
     def _check_profile(result) -> dict:

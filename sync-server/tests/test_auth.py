@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app import security
 from app.main import create_app
 from app.models import LicenseKey, User, now
+from sqlalchemy import select  # noqa: F811
 
 from .conftest import PASSWORD, add_user, bearer, code, login, make_settings, new_key, register
 
@@ -82,11 +83,25 @@ def test_login_errors_do_not_reveal_accounts(app, client):
     assert wrong.json() == missing.json()
 
 
-def test_account_locks_after_repeated_failures(app, client):
+def test_failed_logins_are_limited_per_ip_and_email_without_revealing_accounts(app, client):
     add_user(app, "user@example.org")
-    for _ in range(5):
-        assert login(client, "user@example.org", password="spatne-heslo-123").status_code == 401
-    assert login(client, "user@example.org").json()["detail"]["code"] == "account_locked"
+    real = [login(client, "user@example.org", password="spatne-heslo-123") for _ in range(6)]
+    fake = [login(client, "nikdo@example.org", password="spatne-heslo-123") for _ in range(6)]
+    assert [r.status_code for r in real] == [401] * 5 + [429]
+    assert [r.status_code for r in fake] == [401] * 5 + [429]           # stejné chování, účet nejde poznat
+    assert real[-1].json() == fake[-1].json()
+    # ani správné heslo z této IP teď neprojde, ale z jiné IP ano (útočník nemůže účet zamknout vlastníkovi)
+    assert login(client, "user@example.org").status_code == 429
+    other = TestClient(app, client=("203.0.113.9", 50000))
+    assert login(other, "user@example.org").status_code == 200
+
+
+def test_successful_login_resets_failure_counter(app, client):
+    add_user(app, "user@example.org")
+    for _ in range(4):
+        login(client, "user@example.org", password="spatne-heslo-123")
+    assert login(client, "user@example.org").status_code == 200
+    assert all(login(client, "user@example.org", password="spatne-heslo-123").status_code == 401 for _ in range(4))
 
 
 def test_ip_rate_limits():
@@ -115,10 +130,60 @@ def test_refresh_rotation_and_reuse_detection(app, client):
     assert second.status_code == 200
     assert second.json()["refresh_token"] != first["refresh_token"]
     assert client.get("/auth/me", headers=bearer(second)).status_code == 200
-    # starý token už neplatí a jeho použití ukončí celou relaci
+    third = client.post("/auth/refresh", json={"refresh_token": second.json()["refresh_token"]})
+    assert third.status_code == 200
+    # token o dvě výměny starší = zkopírovaný → celá relace končí
     assert client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]}).status_code == 401
-    assert client.post("/auth/refresh", json={"refresh_token": second.json()["refresh_token"]}).status_code == 401
-    assert client.get("/auth/me", headers=bearer(second)).status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": third.json()["refresh_token"]}).status_code == 401
+    assert client.get("/auth/me", headers=bearer(third)).status_code == 401
+
+
+def test_lost_refresh_response_is_tolerated_briefly(app, client):
+    from app.models import UserSession
+    add_user(app, "user@example.org")
+    first = login(client, "user@example.org").json()["refresh_token"]
+    lost = client.post("/auth/refresh", json={"refresh_token": first})        # odpověď se „ztratila“
+    retry = client.post("/auth/refresh", json={"refresh_token": first})
+    assert lost.status_code == retry.status_code == 200
+    again = client.post("/auth/refresh", json={"refresh_token": retry.json()["refresh_token"]})
+    assert again.status_code == 200
+    # pokus se „ztraceným“ tokenem (nikdy nepoužitým) = podezřelé → relace končí
+    assert client.post("/auth/refresh", json={"refresh_token": lost.json()["refresh_token"]}).status_code == 401
+    # „ztracený“ token už neplatí, ale klient s novým pokračuje
+    assert client.post("/auth/refresh", json={"refresh_token": retry.json()["refresh_token"]}).status_code == 401
+    # po uplynutí tolerance už předchozí token neprojde a relaci ukončí
+    second = login(client, "user@example.org").json()["refresh_token"]
+    ok = client.post("/auth/refresh", json={"refresh_token": second}).json()["refresh_token"]
+    with app.state.session_factory() as db:
+        s = db.scalar(select(UserSession).where(UserSession.token_hash == security.sha256(ok)))
+        s.rotated_at = now() - timedelta(minutes=10)
+        db.commit()
+    assert client.post("/auth/refresh", json={"refresh_token": second}).status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": ok}).status_code == 401
+
+
+def test_legacy_refresh_token_from_1_0_0_still_works(app, client):
+    from app.models import UserSession
+    add_user(app, "user@example.org")
+    login(client, "user@example.org")
+    legacy = "stary-token-bez-tecky-" + "x" * 40
+    with app.state.session_factory() as db:
+        db.scalar(select(UserSession)).token_hash = security.sha256(legacy)
+        db.commit()
+    r = client.post("/auth/refresh", json={"refresh_token": legacy})
+    assert r.status_code == 200 and "." in r.json()["refresh_token"]
+    assert client.post("/auth/refresh", json={"refresh_token": r.json()["refresh_token"]}).status_code == 200
+
+
+def test_concurrent_refresh_with_same_token_rotates_once(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    app = create_app(make_settings(database_url=f"sqlite:///{tmp_path / 'db.sqlite3'}", refresh_grace_s=0))
+    c = TestClient(app)
+    add_user(app, "user@example.org")
+    token = login(c, "user@example.org").json()["refresh_token"]
+    with ThreadPoolExecutor(6) as pool:
+        codes = list(pool.map(lambda _: c.post("/auth/refresh", json={"refresh_token": token}).status_code, range(6)))
+    assert codes.count(200) == 1
 
 
 def test_logout_revokes_session(app, client):
@@ -141,27 +206,79 @@ def test_password_change_logs_out_other_devices(app, client):
     assert login(client, "user@example.org", password="uplne-nove-heslo-1").status_code == 200
 
 
-def test_admin_requires_totp(app, client):
+def test_admin_cannot_enable_totp_over_web(app, client):
+    """Kdo zná heslo správce, nesmí si sám zapnout 2FA a získat tím správu (zapíná se na serveru)."""
     add_user(app, admin=True)
     r = login(client)
-    assert r.status_code == 200
-    # správce bez 2FA nesmí vydávat klíče
     denied = client.post("/admin/keys", json={"note": "x"}, headers=bearer(r))
     assert denied.status_code == 403 and denied.json()["detail"]["code"] == "totp_setup_required"
-    setup = client.post("/auth/totp/setup", json={}, headers=bearer(r)).json()
-    assert setup["uri"].startswith("otpauth://totp/NetMonitor:")
-    assert client.post("/auth/totp/enable", json={"code": "000000"}, headers=bearer(r)).status_code == 401
-    enabled = client.post("/auth/totp/enable", json={"code": code(setup["secret"])}, headers=bearer(r))
-    assert enabled.status_code == 200 and enabled.json()["mfa"] is True
-    assert client.post("/admin/keys", json={"note": "x"}, headers=bearer(r)).status_code == 201
-    # další přihlášení už kód vyžaduje a stejný kód nejde použít znovu
-    assert login(client).json()["detail"]["code"] == "totp_required"
-    assert login(client, secret=setup["secret"]).json()["detail"]["code"] == "invalid_totp"
+    assert "totp-setup" in denied.json()["detail"]["message"]
+    for path, body in (("/auth/totp/setup", {}), ("/auth/totp/enable", {"code": "123456"})):
+        res = client.post(path, json=body, headers=bearer(r))
+        assert res.status_code == 403 and res.json()["detail"]["code"] == "totp_cli_required"
+
+
+def test_enabling_totp_replaces_all_sessions(app, client):
+    add_user(app, "user@example.org")
+    old = login(client, "user@example.org")
+    stolen = old.json()["refresh_token"]                      # zkopírováno před zapnutím 2FA
+    setup = client.post("/auth/totp/setup", json={}, headers=bearer(old)).json()
+    assert client.post("/auth/totp/enable", json={"code": "000000"}, headers=bearer(old)).status_code == 401
+    enabled = client.post("/auth/totp/enable", json={"code": code(setup["secret"])}, headers=bearer(old))
+    body = enabled.json()
+    assert enabled.status_code == 200 and body["mfa"] is True and body["refresh_token"] != stolen
+    assert client.post("/auth/refresh", json={"refresh_token": stolen}).status_code == 401
+    assert client.get("/auth/me", headers=bearer(old)).status_code == 401
+    assert client.get("/auth/me", headers=bearer(enabled)).status_code == 200
+    assert login(client, "user@example.org").json()["detail"]["code"] == "totp_required"
+
+
+def test_totp_code_cannot_be_reused(app, client):
+    secret = add_user(app, admin=True, totp=True)
+    first = login(client, secret=secret)
+    assert first.status_code == 200
+    assert login(client, secret=secret).json()["detail"]["code"] == "invalid_totp"
+
+
+def test_admin_rights_need_recent_totp_not_just_a_stored_token(app, client):
+    from app.models import UserSession
+    secret = add_user(app, admin=True, totp=True)
+    r = login(client, secret=secret)
+    assert client.get("/admin/keys", headers=bearer(r)).status_code == 200
     with app.state.session_factory() as db:
-        user = db.scalar(select(User))
-        user.totp_last_step -= 5
+        for s in db.scalars(select(UserSession)).all():
+            s.mfa_at = now() - timedelta(hours=13)
         db.commit()
-    assert login(client, secret=setup["secret"]).status_code == 200
+    renewed = client.post("/auth/refresh", json={"refresh_token": r.json()["refresh_token"]})
+    denied = client.get("/admin/keys", headers=bearer(renewed))
+    assert denied.status_code == 403 and denied.json()["detail"]["code"] == "totp_required"
+    assert client.get("/profiles", headers=bearer(renewed)).status_code == 200     # běžné funkce dál fungují
+
+
+def test_totp_secret_is_encrypted_and_legacy_plaintext_is_migrated(tmp_path):
+    from app.main import create_app as make
+    url = f"sqlite:///{tmp_path / 'db.sqlite3'}"
+    app1 = make(make_settings(database_url=url))
+    secret = add_user(app1, admin=True, totp=True, sealed=False)          # stav z verze 1.0.0
+    app2 = make(make_settings(database_url=url))                          # restart = migrace
+    with app2.state.session_factory() as db:
+        stored = db.scalar(select(User)).totp_secret
+    assert stored.startswith("enc1:") and secret not in stored
+    assert login(TestClient(app2), secret=secret).status_code == 200
+
+
+def test_schema_upgrade_adds_new_columns(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.sqlite3"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE user_sessions (id CHAR(32) PRIMARY KEY, user_id CHAR(32), token_hash VARCHAR(64), "
+                "previous_hash VARCHAR(64), device VARCHAR(100), mfa BOOLEAN, created_at DATETIME, "
+                "last_used_at DATETIME, expires_at DATETIME, revoked_at DATETIME)")
+    con.commit()
+    con.close()
+    create_app(make_settings(database_url=f"sqlite:///{path}"))
+    cols = {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(user_sessions)")}
+    assert {"mfa_at", "rotated_at"} <= cols
 
 
 def test_regular_user_cannot_use_admin_api(client, admin):

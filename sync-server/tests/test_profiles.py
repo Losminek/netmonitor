@@ -84,3 +84,32 @@ def test_full_flow_key_register_sync(client, admin):
     h = bearer(register(client, new_key(client, admin)))
     pid = client.post("/profiles", json={"name": "Práce", "config": CONFIG}, headers=h).json()["id"]
     assert client.get(f"/profiles/{pid}", headers=admin).status_code == 404   # ani správce nečte cizí profily
+
+
+def test_delete_with_revision_does_not_remove_newer_change(app, client):
+    h = user(app, client)
+    pid = client.post("/profiles", json={"name": "A", "config": CONFIG}, headers=h).json()["id"]
+    client.put(f"/profiles/{pid}", json={"revision": 1, "config": {**CONFIG, "x": 1}}, headers=h)
+    stale = client.delete(f"/profiles/{pid}?revision=1", headers=h)
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "revision_conflict"
+    assert client.get(f"/profiles/{pid}", headers=h).status_code == 200
+    assert client.delete(f"/profiles/{pid}?revision=2", headers=h).status_code == 204
+    assert client.delete(f"/profiles/{pid}?revision=2", headers=h).status_code == 404
+
+
+def test_put_returns_exactly_the_written_revision(app, client):
+    h = user(app, client)
+    pid = client.post("/profiles", json={"name": "A", "config": CONFIG}, headers=h).json()["id"]
+    r = client.put(f"/profiles/{pid}", json={"revision": 1, "name": "B"}, headers=h).json()
+    assert (r["revision"], r["name"], r["config"]) == (2, "B", CONFIG) and r["updated_at"]
+
+
+def test_concurrent_creates_respect_profile_limit(tmp_path):
+    app = create_app(make_settings(database_url=f"sqlite:///{tmp_path / 'db.sqlite3'}", max_profiles=3))
+    client = TestClient(app)
+    h = user(app, client)
+    with ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(lambda i: client.post("/profiles", json={"name": f"P{i}", "config": CONFIG},
+                                                    headers=h).status_code, range(8)))
+    assert codes.count(201) == 3
+    assert len(client.get("/profiles", headers=h).json()) == 3

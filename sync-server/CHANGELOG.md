@@ -1,0 +1,18 @@
+# NetMonitor Sync – změny
+
+## 1.1.0
+- Chybná přihlášení se počítají na dvojici IP + e-mail; odpověď je stejná pro existující i neexistující účet.
+- Dvoufázové ověření správce se zapíná jen na serveru (`python -m app.cli totp-setup`, QR kód v terminálu);
+  `create-admin` jej nastaví rovnou.
+- Správa vyžaduje kód z autentikátoru zadaný za posledních 12 hodin (`ADMIN_MFA_HOURS`).
+- Zapnutí 2FA běžným uživatelem ukončí všechny jeho dosavadní relace.
+- Obnovovací tokeny nesou id relace: použití kteréhokoli staršího tokenu relaci ukončí; krátce po výměně
+  se toleruje opakování (ztracená odpověď). Výměna tokenu i spotřeba kódu 2FA jsou atomické.
+- Tajemství 2FA jsou v databázi šifrovaná (stávající se zašifrují při startu).
+- Smazání profilu s `?revision=` nesmaže novější změnu; PUT vrací přesně zapsanou revizi;
+  limit počtu profilů platí i při souběžných požadavcích.
+- Databáze se při startu sama doplní o nové sloupce.
+- Image `latest` a číslo verze se publikují jen z větve main; compose používá pevnou verzi.
+
+## 1.0.0
+- První vydání: účty, licenční klíče, profily, správa.

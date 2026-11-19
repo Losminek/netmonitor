@@ -4,7 +4,7 @@ name: Sync server image
 
 on:
   push:
-    branches: [main, feature/account-profiles-sync]
+    branches: [main, "fix/**", "feature/**"]
     paths: ["sync-server/**", ".github/workflows/sync-server.yml"]
   workflow_dispatch:
 
@@ -37,9 +37,10 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci-only-password
           JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-secret
+          TAG: ci
         run: |
           set -euo pipefail
-          docker tag netmonitor-sync:ci ghcr.io/mersl77/netmonitor-sync:latest
+          docker tag netmonitor-sync:ci ghcr.io/mersl77/netmonitor-sync:ci
           docker pull -q postgres:17
           docker network create nginx-proxy-manager_default
           docker compose up -d --pull never --wait --wait-timeout 120 || { docker compose logs; exit 1; }
@@ -61,6 +62,28 @@ jobs:
           json -H "Authorization: Bearer $token" "$api/profiles" | grep -q 'Práce'
           docker compose exec -T api python -m app.cli list-users | grep -q ci@example.org
           docker compose down -v
+      - name: Upgrade test – data from the previous release (1.0.0) survive the new image
+        working-directory: sync-server
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+          JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-secret
+        run: |
+          set -euo pipefail
+          api=http://127.0.0.1:8766
+          json() { curl -fsS -H 'Content-Type: application/json' "$@"; }
+          TAG=1.0.0 docker compose up -d --wait --wait-timeout 120 || { docker compose logs; exit 1; }
+          key="$(TAG=1.0.0 docker compose exec -T api python -m app.cli create-key "Upgrade")"
+          refresh="$(json -d "{\"email\":\"up@example.org\",\"password\":\"up-heslo-dlouhe-1\",\"license_key\":\"$key\"}" \
+            "$api/auth/register" | python -c 'import json,sys; print(json.load(sys.stdin)["refresh_token"])')"
+          token="$(json -d "{\"refresh_token\":\"$refresh\"}" "$api/auth/refresh" | python -c 'import json,sys; d=json.load(sys.stdin); print(d["access_token"]); open("/tmp/r","w").write(d["refresh_token"])')"
+          json -H "Authorization: Bearer $token" -d '{"name":"Před upgradem","config":{"ping":{"targets":[]}}}' "$api/profiles" >/dev/null
+          TAG=ci docker compose up -d --wait --wait-timeout 120 || { docker compose logs; exit 1; }
+          curl -fsS "$api/health" | grep -q '"version":"1.1.0"'
+          token="$(json -d "{\"refresh_token\":\"$(cat /tmp/r)\"}" "$api/auth/refresh" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+          json -H "Authorization: Bearer $token" "$api/profiles" | grep -q 'Před upgradem'
+          TAG=ci docker compose exec -T api python -m app.cli list-users | grep -q up@example.org
+          docker compose down -v
+
       - name: Push to GHCR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,7 +92,10 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/netmonitor-sync"
           version="$(python -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('sync-server/app/__init__.py').read()).group(1))")"
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          for tag in "$version" "sha-${GITHUB_SHA::12}" latest; do
+          tags="sha-${GITHUB_SHA::12}"
+          # Verze a latest jen z main – vývojové větve produkci nikdy nepřepíšou.
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then tags="$tags $version latest"; fi
+          for tag in $tags; do
             docker tag netmonitor-sync:ci "$image:$tag"
             docker push "$image:$tag"
           done

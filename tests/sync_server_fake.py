@@ -51,7 +51,8 @@ class Server:
     def open(self, req, timeout=None):
         if self.offline:
             raise OSError("síť není dostupná")
-        path = urlsplit(req.full_url).path
+        url = urlsplit(req.full_url)
+        path = url.path + ("?" + url.query if url.query else "")
         self.requests.append((req.get_method(), path))
         r = self.http.request(req.get_method(), path, content=req.data, headers=dict(req.header_items()))
         if r.status_code >= 400:
@@ -63,7 +64,8 @@ class Server:
         secret = self.security.new_totp_secret()
         with self.app.state.session_factory() as db:
             db.add(self.models.User(email=email, password_hash=self.security.hash_password(PASSWORD),
-                                    is_admin=True, totp_secret=secret, totp_enabled=True))
+                                    is_admin=True, totp_enabled=True,
+                                    totp_secret=self.security.seal(self.app.state.settings.jwt_secret, secret)))
             db.commit()
         return secret
 

@@ -43,7 +43,7 @@ class Snapshot:
     account: str
     server: str
     profiles: list[LocalProfile]
-    deletes: list[str] = field(default_factory=list)
+    deletes: list[tuple[str, int | None]] = field(default_factory=list)
 
 
 @dataclass
@@ -79,10 +79,14 @@ def run(client: SyncClient, snap: Snapshot, resolutions: dict[str, str] | None =
     """Síťová část. Chyba spojení přeruší celý běh (SyncError), chyba jednoho profilu jen ten profil."""
     resolutions = resolutions or {}
     actions: list[Action] = []
-    for remote_id in snap.deletes:
+    for remote_id, revision in snap.deletes:
         try:
-            client.delete(remote_id)
+            client.delete(remote_id, revision)
         except SyncError as exc:
+            if exc.code == "revision_conflict":
+                # Profil mezitím změnil jiný počítač – smazání se ruší, novější verze se stáhne zpět.
+                actions.append(Action("deleted", remote={"id": remote_id}))
+                continue
             if exc.status != 404:
                 if exc.status is None or exc.status == 401:
                     raise

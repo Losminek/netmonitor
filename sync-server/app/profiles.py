@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .deps import Auth, current_auth, error, get_db
-from .models import Profile, aware, now
+from .models import Profile, User, aware, now
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
 
@@ -70,6 +70,9 @@ def create_profile(body: ProfileCreate, request: Request, auth: Auth = Depends(c
                    db: Session = Depends(get_db)):
     name = clean_name(body.name)
     check_config(request, body.config)
+    # Zápis do řádku účtu zamkne účet (PostgreSQL řádek, SQLite celou databázi) až do konce transakce,
+    # takže souběžné požadavky nepřekročí limit počtu profilů.
+    db.execute(update(User).where(User.id == auth.user.id).values(last_login_at=User.last_login_at))
     count = db.scalar(select(func.count()).select_from(Profile).where(Profile.user_id == auth.user.id))
     if count >= request.app.state.settings.max_profiles:
         raise error(409, "profile_limit", "Dosažen maximální počet profilů na účet.")
@@ -98,22 +101,34 @@ def update_profile(profile_id: uuid.UUID, body: ProfileUpdate, request: Request,
         values["name"] = clean_name(body.name)
         values["name_key"] = values["name"].casefold()
     # Atomická výměna: souběžné uložení stejné revize uspěje jen jednou.
+    # Vrací se přesně zapsaný řádek (RETURNING), ne stav po případné další souběžné změně.
     try:
-        result = db.execute(update(Profile).where(
+        row = db.execute(update(Profile).where(
             Profile.id == profile_id, Profile.user_id == auth.user.id, Profile.revision == body.revision
-        ).values(**values))
+        ).values(**values).returning(Profile.id, Profile.name, Profile.revision, Profile.updated_at,
+                                     Profile.config)).first()
     except IntegrityError as exc:
         db.rollback()
         raise error(409, "name_exists", "Profil s tímto názvem už na serveru existuje.") from exc
-    if result.rowcount != 1:
+    if row is None:
         db.rollback()
         owned(db, auth, profile_id)
         raise error(409, "revision_conflict", "Profil mezitím změnilo jiné zařízení.")
     db.commit()
-    return full(owned(db, auth, profile_id))
+    updated = aware(row.updated_at)
+    return {"id": str(row.id), "name": row.name, "revision": row.revision,
+            "updated_at": updated.isoformat() if updated else None, "config": row.config}
 
 
 @router.delete("/{profile_id}", status_code=204)
-def delete_profile(profile_id: uuid.UUID, auth: Auth = Depends(current_auth), db: Session = Depends(get_db)):
-    db.delete(owned(db, auth, profile_id))
+def delete_profile(profile_id: uuid.UUID, revision: int | None = Query(default=None, ge=1),
+                   auth: Auth = Depends(current_auth), db: Session = Depends(get_db)):
+    """S revision smaže jen tu verzi, kterou klient viděl; novější změnu z jiného počítače nesmaže (409)."""
+    conditions = [Profile.id == profile_id, Profile.user_id == auth.user.id]
+    if revision is not None:
+        conditions.append(Profile.revision == revision)
+    if db.execute(delete(Profile).where(*conditions)).rowcount != 1:
+        db.rollback()
+        owned(db, auth, profile_id)
+        raise error(409, "revision_conflict", "Profil mezitím změnilo jiné zařízení.")
     db.commit()

@@ -26,6 +26,30 @@ class RateLimiter:
             hits.append(now)
             return 0
 
+    def blocked(self, key: str, limit: int, window_s: int, now: float | None = None) -> int:
+        """Jako check(), ale nic nezapočítá (pro počítání jen neúspěšných pokusů)."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            hits = self._hits.get(key)
+            if not hits:
+                return 0
+            while hits and now - hits[0] >= window_s:
+                hits.popleft()
+            if len(hits) >= limit:
+                return max(1, int(window_s - (now - hits[0])) + 1)
+            return 0
+
+    def hit(self, key: str, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if len(self._hits) > self._max_keys:
+                self._prune(now)
+            self._hits.setdefault(key, deque()).append(now)
+
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._hits.pop(key, None)
+
     def _prune(self, now: float) -> None:
         for key in [k for k, v in self._hits.items() if not v or now - v[-1] > 3600]:
             del self._hits[key]

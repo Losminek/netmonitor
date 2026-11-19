@@ -77,7 +77,7 @@ def test_rename_keeps_server_binding_and_delete_is_queued(tmp_path):
     assert rec['name'] == 'Práce' and rec['remote_id'] == remote and rec['synced_hash'] == 'abc'
     assert rec['remote_account'] == 'test@example.org' and rec['remote_server'] == 'https://sync.zelina.eu'
     store.delete(pid)
-    assert store.pending_deletes('test@example.org', 'https://sync.zelina.eu') == [remote]
+    assert store.pending_deletes('test@example.org', 'https://sync.zelina.eu') == [(remote, 1)]
     assert store.pending_deletes('jiny@example.org', 'https://sync.zelina.eu') == []
     store.clear_pending_delete(remote)
     assert store.pending_deletes('test@example.org', 'https://sync.zelina.eu') == []

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request
@@ -11,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import security
-from .deps import Auth, current_auth, error, get_db, limit
+from .deps import Auth, client_ip, current_auth, error, get_db, limit
 from .models import LicenseKey, User, UserSession, aware, now
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -71,9 +72,11 @@ def open_session(request: Request, db: Session, user: User, device: str, mfa: bo
     ).order_by(UserSession.last_used_at.desc())).all()
     for old in active[settings.max_sessions - 1:]:
         old.revoked_at = now()
-    token = security.new_refresh_token()
-    session = UserSession(user_id=user.id, token_hash=security.sha256(token), device=device.strip()[:100],
-                          mfa=mfa, expires_at=now() + timedelta(days=settings.refresh_days))
+    session_id = uuid.uuid4()
+    token = security.new_refresh_token(session_id)
+    session = UserSession(id=session_id, user_id=user.id, token_hash=security.sha256(token), device=device.strip()[:100],
+                          mfa=mfa, mfa_at=now() if mfa else None,
+                          expires_at=now() + timedelta(days=settings.refresh_days))
     db.add(session)
     user.last_login_at = now()
     db.commit()
@@ -127,62 +130,81 @@ def login(body: LoginBody, request: Request, db: Session = Depends(get_db)):
     settings = request.app.state.settings
     limit(request, "login", settings.rate_login)
     email = body.email.strip().casefold()
-    user = db.scalar(select(User).where(User.email == email))
-    bad = error(401, "invalid_credentials", "Nesprávný e-mail nebo heslo.")
-    if user is not None and user.locked_until is not None and aware(user.locked_until) > now():
+    limiter = request.app.state.limiter
+    # Chybné pokusy se počítají na dvojici IP + e-mail. Odpověď je stejná pro existující i neexistující
+    # účet a cizí IP adresa nemůže účet zamknout jeho vlastníkovi.
+    fail_key = f"fail:{client_ip(request)}:{email}"
+    wait = limiter.blocked(fail_key, *settings.login_failures)
+    if wait:
         security.verify_password(None, body.password)        # stejná doba odezvy
-        raise error(429, "account_locked", "Účet je dočasně zamčen po opakovaných chybných pokusech.")
+        raise error(429, "rate_limited", f"Příliš mnoho chybných pokusů. Zkuste to za {wait} s.",
+                    {"Retry-After": str(wait)})
+    user = db.scalar(select(User).where(User.email == email))
     ok = security.verify_password(user.password_hash if user else None, body.password)
-    if user is None:
-        raise bad
-    if not ok or not user.is_active:
-        fail(db, user, settings)
-        raise bad
+    if user is None or not ok or not user.is_active:
+        limiter.hit(fail_key)
+        raise error(401, "invalid_credentials", "Nesprávný e-mail nebo heslo.")
     mfa = False
     if user.totp_enabled:
         if not body.totp_code:
             raise error(401, "totp_required", "Zadejte kód z autentikátoru.")
-        step = security.totp_verify(user.totp_secret, body.totp_code, user.totp_last_step)
-        if step is None:
-            fail(db, user, settings)
+        if not consume_totp(request, db, user, body.totp_code):
+            limiter.hit(fail_key)
             raise error(401, "invalid_totp", "Nesprávný nebo již použitý kód z autentikátoru.")
-        user.totp_last_step = step
         mfa = True
-    user.failed_logins = 0
-    user.locked_until = None
+    limiter.clear(fail_key)
     return open_session(request, db, user, body.device, mfa=mfa)
 
 
-def fail(db: Session, user: User, settings) -> None:
-    user.failed_logins = (user.failed_logins or 0) + 1
-    if user.failed_logins >= settings.lock_after_failures:
-        user.locked_until = now() + timedelta(minutes=settings.lock_minutes)
-        user.failed_logins = 0
+def consume_totp(request: Request, db: Session, user: User, code: str) -> bool:
+    """Ověří kód a atomicky jej spotřebuje – stejný kód nelze použít dvakrát ani souběžně."""
+    secret = security.unseal(request.app.state.settings.jwt_secret, user.totp_secret)
+    step = security.totp_verify(secret, code, user.totp_last_step) if secret else None
+    if step is None:
+        return False
+    taken = db.execute(update(User).where(User.id == user.id, User.totp_last_step < step)
+                       .values(totp_last_step=step))
     db.commit()
+    return taken.rowcount == 1
 
 
 @router.post("/refresh")
 def refresh(body: RefreshBody, request: Request, db: Session = Depends(get_db)):
+    settings = request.app.state.settings
     limit(request, "refresh", (60, 300))
     digest = security.sha256(body.refresh_token)
-    session = db.scalar(select(UserSession).where(UserSession.token_hash == digest))
+    sid = security.refresh_session_id(body.refresh_token)
+    if sid is not None:
+        session = db.get(UserSession, sid)
+    else:                                  # token z 1.0.0 – dohledání podle otisku
+        session = db.scalar(select(UserSession).where(
+            (UserSession.token_hash == digest) | (UserSession.previous_hash == digest)))
     if session is None:
-        # Použití už vyměněného tokenu = token byl nejspíš zkopírován. Ukončí se celá relace.
-        stolen = db.scalar(select(UserSession).where(UserSession.previous_hash == digest))
-        if stolen is not None and stolen.revoked_at is None:
-            stolen.revoked_at = now()
-            db.commit()
         raise error(401, "unauthorized", "Relace vypršela. Přihlaste se znovu.")
-    user = db.get(User, session.user_id)
-    if (session.revoked_at is not None or aware(session.expires_at) <= now()
-            or user is None or not user.is_active):
+    token = security.new_refresh_token(session.id)
+    valid = (UserSession.id == session.id, UserSession.revoked_at.is_(None), UserSession.expires_at > now())
+    # Atomická výměna: stejný token obnoví relaci nejvýš jednou.
+    rotated = db.execute(update(UserSession).where(UserSession.token_hash == digest, *valid).values(
+        token_hash=security.sha256(token), previous_hash=digest, rotated_at=now(), last_used_at=now(),
+        expires_at=now() + timedelta(days=settings.refresh_days)
+    ).execution_options(synchronize_session=False))
+    if rotated.rowcount != 1:
+        # Klient mohl o odpověď přijít (uspání, výpadek Wi-Fi) a zkouší předchozí token znovu.
+        grace = now() - timedelta(seconds=settings.refresh_grace_s)
+        rotated = db.execute(update(UserSession).where(
+            UserSession.previous_hash == digest, UserSession.rotated_at > grace, *valid
+        ).values(token_hash=security.sha256(token), last_used_at=now()).execution_options(synchronize_session=False))
+    if rotated.rowcount != 1:
+        # Starší token téže relace = token byl zkopírován. Relace končí pro všechny jeho držitele.
+        db.execute(update(UserSession).where(UserSession.id == session.id, UserSession.revoked_at.is_(None))
+                   .values(revoked_at=now()).execution_options(synchronize_session=False))
+        db.commit()
         raise error(401, "unauthorized", "Relace vypršela. Přihlaste se znovu.")
-    token = security.new_refresh_token()
-    session.previous_hash = session.token_hash
-    session.token_hash = security.sha256(token)
-    session.last_used_at = now()
-    session.expires_at = now() + timedelta(days=request.app.state.settings.refresh_days)
     db.commit()
+    db.refresh(session)
+    user = db.get(User, session.user_id)
+    if user is None or not user.is_active:
+        raise error(401, "unauthorized", "Relace vypršela. Přihlaste se znovu.")
     return token_response(request, user, session, token)
 
 
@@ -212,13 +234,22 @@ def change_password(body: PasswordBody, request: Request, auth: Auth = Depends(c
     db.commit()
 
 
+def _no_web_enrollment_for_admin(user: User) -> None:
+    # Kdo zná heslo správce, nesmí si sám zapnout 2FA a tím získat správu. Správce jej zapíná na serveru.
+    if user.is_admin:
+        raise error(403, "totp_cli_required", "Dvoufázové ověření správce se zapíná na serveru příkazem: "
+                    "python -m app.cli totp-setup <e-mail>")
+
+
 @router.post("/totp/setup")
-def totp_setup(auth: Auth = Depends(current_auth), db: Session = Depends(get_db)):
+def totp_setup(request: Request, auth: Auth = Depends(current_auth), db: Session = Depends(get_db)):
+    _no_web_enrollment_for_admin(auth.user)
     if auth.user.totp_enabled:
         raise error(409, "totp_already_enabled", "Dvoufázové ověření je už zapnuté.")
-    auth.user.totp_secret = security.new_totp_secret()
+    secret = security.new_totp_secret()
+    auth.user.totp_secret = security.seal(request.app.state.settings.jwt_secret, secret)
     db.commit()
-    return {"secret": auth.user.totp_secret, "uri": security.totp_uri(auth.user.totp_secret, auth.user.email)}
+    return {"secret": secret, "uri": security.totp_uri(secret, auth.user.email)}
 
 
 @router.post("/totp/enable")
@@ -226,22 +257,17 @@ def totp_enable(body: CodeBody, request: Request, auth: Auth = Depends(current_a
                 db: Session = Depends(get_db)):
     limit(request, "login", request.app.state.settings.rate_login)
     user = auth.user
+    _no_web_enrollment_for_admin(user)
     if user.totp_enabled:
         raise error(409, "totp_already_enabled", "Dvoufázové ověření je už zapnuté.")
     if not user.totp_secret:
         raise error(409, "totp_not_started", "Nejprve spusťte nastavení dvoufázového ověření.")
-    step = security.totp_verify(user.totp_secret, body.code, user.totp_last_step)
-    if step is None:
+    if not consume_totp(request, db, user, body.code):
         raise error(401, "invalid_totp", "Kód nesouhlasí. Zkontrolujte čas v telefonu a zkuste další kód.")
     user.totp_enabled = True
-    user.totp_last_step = step
-    auth.session.mfa = True
-    # Relace vzniklé před zapnutím 2FA končí.
-    db.execute(update(UserSession).where(
-        UserSession.user_id == user.id, UserSession.id != auth.session.id,
-        UserSession.revoked_at.is_(None)).values(revoked_at=now()))
+    # Všechny dosavadní relace (i tato) končí; pokračuje se novou. Token zkopírovaný před zapnutím
+    # 2FA tak neplatí.
+    db.execute(update(UserSession).where(UserSession.user_id == user.id, UserSession.revoked_at.is_(None))
+               .values(revoked_at=now()))
     db.commit()
-    settings = request.app.state.settings
-    return {"access_token": security.make_access_token(settings.jwt_secret, user.id, auth.session.id, True,
-                                                       settings.access_minutes),
-            "expires_in": settings.access_minutes * 60, "mfa": True, "user": user_dict(user)}
+    return open_session(request, db, user, auth.session.device, mfa=True)
