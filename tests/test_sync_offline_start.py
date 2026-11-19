@@ -50,6 +50,8 @@ class Server:
             return Response({"access_token": "test-access", "refresh_token": "rotated-refresh",
                              "user": {"email": EMAIL}})
         assert req.get_header("Authorization") == "Bearer test-access"
+        if (method, path) == ("POST", "/auth/logout"):
+            return Response({})
         if (method, path) == ("GET", "/profiles"):
             return Response([])
         if (method, path) == ("POST", "/profiles"):
@@ -226,6 +228,11 @@ def test_logout_discards_late_resume_result(service, server, monkeypatch):
     service.busy = False
     service.logout()
     done(fn())
+    # pozdě obnovená relace se ukončí i na serveru
+    assert pending and pending[-1][0].__self__.access_token == "test-access"
+    assert pending[-1][0].__name__ == "logout"
+    pending.pop()[0]()
+    assert ("POST", "/auth/logout") in server.requests
     assert not service.logged_in and not service.resume_pending
     assert not service._periodic.isActive()
     assert service.client.refresh_token is None and service.secrets.load() is None

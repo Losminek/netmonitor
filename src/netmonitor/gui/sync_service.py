@@ -200,7 +200,11 @@ class SyncService(QObject):
 
         def done(result):
             if gen != self._resume_gen:
-                # Mezitím odhlášeno: obnova na pozadí mohla klientovi vrátit tokeny – znovu je zahodit.
+                # Mezitím odhlášeno: obnova na pozadí mohla klientovi vrátit tokeny – relaci ukončit
+                # i na serveru a tokeny znovu zahodit (tokeny uložené během obnovy smaže secrets.clear()).
+                if client.access_token and not self.ctrl._stopping:
+                    old = SyncClient(client.base_url, access_token=client.access_token)
+                    self.ctrl._run_bg("sync-logout-late", old.logout, lambda _r: None)
                 client.access_token = client.refresh_token = client.user = None
                 client.mfa = False
                 self.secrets.clear()
