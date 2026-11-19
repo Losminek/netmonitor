@@ -235,17 +235,31 @@ def test_license_key_registration_and_admin_flow(server):
     assert admin.admin_revoke_key(listed["id"])["state"] == "revoked"
 
 
-def test_admin_enables_totp_from_client(server):
+def test_admin_cannot_enable_totp_from_client(server):
     server.add_user("admin@example.org", admin=True)
     admin = SyncClient(URL)
     admin.login("admin@example.org", PASSWORD)
     with pytest.raises(SyncError) as exc:
         admin.admin_keys()
-    assert exc.value.code == "totp_setup_required"
-    setup = admin.totp_setup()
-    admin.totp_enable(server.code(setup["secret"]))
-    assert admin.mfa and admin.user["totp_enabled"]
-    assert admin.admin_keys() == []
+    assert exc.value.code == "totp_setup_required" and "totp-setup" in str(exc.value)
+    with pytest.raises(SyncError) as exc:
+        admin.totp_setup()
+    assert exc.value.code == "totp_cli_required"
+
+
+def test_delete_does_not_remove_profile_changed_on_another_computer(server, tmp_path):
+    server.add_user()
+    a, b = PC(tmp_path, "a"), PC(tmp_path, "b")
+    a.store.create("Zákazník", cfg("192.168.5.1"))
+    a.sync(), b.sync()
+    b.store.delete(b.id("Zákazník"))                    # smazáno offline na B
+    a.edit("Zákazník", "192.168.5.99")                  # mezitím upraveno na A
+    a.sync()
+    b.sync()
+    assert "Zákazník" in server.profiles()              # novější změna přežila
+    assert b.store.pending_deletes(b.account, URL) == []
+    b.sync()
+    assert b.host("Zákazník") == "192.168.5.99"         # a vrátila se i na B
 
 
 def test_expired_access_token_is_refreshed_transparently(server):

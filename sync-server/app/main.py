@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from . import __version__, admin, auth, profiles, settings as settings_mod
 from .deps import client_ip
-from .models import Base
+from .models import Base, User, upgrade_schema
 from .ratelimit import RateLimiter
 
 log = logging.getLogger("netmonitor-sync")
@@ -26,10 +26,24 @@ def make_engine(url: str):
     return create_engine(url, pool_pre_ping=True)
 
 
+def prepare_database(engine, settings) -> None:
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from . import security
+    Base.metadata.create_all(engine)
+    upgrade_schema(engine)
+    with Session(engine) as db:          # tajemství TOTP z 1.0.0 se zašifrují
+        for user in db.scalars(select(User).where(User.totp_secret.is_not(None))).all():
+            if not security.is_sealed(user.totp_secret):
+                user.totp_secret = security.seal(settings.jwt_secret, user.totp_secret)
+        db.commit()
+
+
 def create_app(settings: settings_mod.Settings | None = None) -> FastAPI:
     settings = settings or settings_mod.load()
     engine = make_engine(settings.database_url)
-    Base.metadata.create_all(engine)
+    prepare_database(engine, settings)
     # Veřejná dokumentace API je vypnutá – server nemá co prozrazovat.
     app = FastAPI(title="NetMonitor Sync", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings

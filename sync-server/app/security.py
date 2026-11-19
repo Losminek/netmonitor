@@ -37,8 +37,20 @@ def sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def new_refresh_token() -> str:
-    return secrets.token_urlsafe(48)
+def new_refresh_token(session_id) -> str:
+    """<id relace>.<tajemství> – podle id server pozná i starý (ukradený) token téže relace."""
+    return f"{session_id.hex}.{secrets.token_urlsafe(48)}"
+
+
+def refresh_session_id(token: str):
+    import uuid
+    head, sep, _ = token.partition(".")
+    if not sep or len(head) != 32:
+        return None                       # token z verze 1.0.0
+    try:
+        return uuid.UUID(hex=head)
+    except ValueError:
+        return None
 
 
 def new_license_key() -> str:
@@ -91,3 +103,41 @@ def totp_verify(secret: str, code: str, last_step: int = 0, at: float | None = N
 
 def totp_uri(secret: str, email: str) -> str:
     return f"otpauth://totp/NetMonitor:{quote(email)}?secret={secret}&issuer=NetMonitor&digits=6&period=30"
+
+
+# ---------------------------------------------------------------- šifrování tajemství TOTP v databázi
+_SEALED = "enc1:"
+
+
+def _fernet(server_secret: str):
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"netmonitor-sync", info=b"totp-secret-v1"
+               ).derive(server_secret.encode("utf-8"))
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def seal(server_secret: str, value: str) -> str:
+    return _SEALED + _fernet(server_secret).encrypt(value.encode("ascii")).decode("ascii")
+
+
+def unseal(server_secret: str, value: str | None) -> str | None:
+    """Vrátí tajemství v čitelné podobě. Hodnoty z 1.0.0 (nešifrované) projdou beze změny."""
+    if not value or not value.startswith(_SEALED):
+        return value
+    from cryptography.fernet import InvalidToken
+    try:
+        return _fernet(server_secret).decrypt(value[len(_SEALED):].encode("ascii")).decode("ascii")
+    except InvalidToken as exc:
+        raise RuntimeError("Tajemství TOTP nelze dešifrovat – změnil se JWT_SECRET? "
+                           "Pomůže `python -m app.cli reset-totp <e-mail>`.") from exc
+
+
+def is_sealed(value: str | None) -> bool:
+    return bool(value) and value.startswith(_SEALED)
+
+
+def totp_qr_terminal(uri: str) -> None:
+    import segno
+    segno.make(uri, error="m").terminal(compact=True)

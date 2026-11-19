@@ -42,11 +42,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)   # šifrováno (security.seal)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     totp_last_step: Mapped[int] = mapped_column(Integer, default=0)     # ochrana proti opakování kódu
-    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
-    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)          # nepoužívá se (od 1.1.0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # nepoužívá se
     license_key_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("license_keys.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -61,6 +61,8 @@ class UserSession(Base):
     previous_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     device: Mapped[str] = mapped_column(String(100), default="")
     mfa: Mapped[bool] = mapped_column(Boolean, default=False)
+    mfa_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # poslední ověřený kód
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -77,3 +79,24 @@ class Profile(Base):
     config: Mapped[dict] = mapped_column(JSON)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+def upgrade_schema(engine) -> None:
+    """Doplní sloupce přidané v novějších verzích (create_all existující tabulky nemění).
+
+    Všechny nové sloupce jsou NULL-ovatelné, takže stačí prosté ADD COLUMN.
+    """
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                continue
+            present = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name not in present:
+                    kind = column.type.compile(dialect=engine.dialect)
+                    conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {column.name} {kind}'))
+        if engine.dialect.name == "postgresql":
+            # 1.0.0 mělo pro tajemství TOTP jen 64 znaků; zašifrované je delší.
+            conn.execute(text("ALTER TABLE users ALTER COLUMN totp_secret TYPE VARCHAR(255)"))

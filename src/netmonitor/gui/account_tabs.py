@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPixmap
+from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
@@ -70,24 +70,6 @@ def when(iso: str | None) -> str:
         return datetime.fromisoformat(iso).astimezone().strftime("%d.%m.%Y %H:%M")
     except ValueError:
         return iso
-
-
-def qr_pixmap(text: str, size: int = 232) -> QPixmap:
-    """QR kód černě na bílém s okrajem 4 moduly (nutné pro spolehlivé načtení telefonem)."""
-    from ..core.qr import matrix
-    modules = matrix(text)
-    count = len(modules) + 8
-    scale = max(2, size // count)
-    image = QImage(count * scale, count * scale, QImage.Format.Format_RGB32)
-    image.fill(QColor("white"))
-    painter = QPainter(image)
-    black = QColor("black")
-    for y, row in enumerate(modules):
-        for x, dark in enumerate(row):
-            if dark:
-                painter.fillRect((x + 4) * scale, (y + 4) * scale, scale, scale, black)
-    painter.end()
-    return QPixmap.fromImage(image)
 
 
 def invitation(key: dict, server: str) -> str:
@@ -526,36 +508,9 @@ class AdminTab(QWidget):
 
         self.totp_box = QGroupBox("Dvoufázové ověření správce (povinné)")
         tl = QVBoxLayout(self.totp_box)
-        tl.addWidget(hint("Účet správce vydává licenční klíče, proto vyžaduje druhý faktor. V telefonu otevřete "
-                          "autentikátor (Aegis, Google Authenticator, Microsoft Authenticator, Bitwarden…), "
-                          "naskenujte QR kód (nebo zadejte klíč ručně) a potvrďte šestimístným kódem."))
-        self.btn_totp = QPushButton("Zobrazit QR kód pro autentikátor")
-        self.btn_totp.clicked.connect(self._totp_setup)
-        tl.addWidget(self.btn_totp)
-        self.totp_qr = QLabel()
-        self.totp_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.totp_qr.hide()
-        tl.addWidget(self.totp_qr)
-        self.totp_secret = QLineEdit()
-        self.totp_secret.setReadOnly(True)
-        self.totp_secret.setPlaceholderText("klíč se zobrazí po vygenerování")
-        copy_uri = QPushButton("Kopírovat odkaz otpauth://")
-        copy_uri.clicked.connect(lambda: QGuiApplication.clipboard().setText(self._totp_uri))
-        srow = QHBoxLayout()
-        srow.addWidget(self.totp_secret, 1)
-        srow.addWidget(copy_uri)
-        tl.addLayout(srow)
-        self.totp_code = QLineEdit()
-        self.totp_code.setPlaceholderText("kód z autentikátoru")
-        self.totp_code.setMaxLength(8)
-        confirm = QPushButton("Zapnout dvoufázové ověření")
-        confirm.clicked.connect(self._totp_enable)
-        self.totp_code.returnPressed.connect(self._totp_enable)
-        crow = QHBoxLayout()
-        crow.addWidget(self.totp_code, 1)
-        crow.addWidget(confirm)
-        tl.addLayout(crow)
-        self._totp_uri = ""
+        self.totp_hint = hint("")
+        self.totp_hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        tl.addWidget(self.totp_hint)
         layout.addWidget(self.totp_box)
 
         self.keys_box = QGroupBox("Licenční klíče")
@@ -632,12 +587,22 @@ class AdminTab(QWidget):
         sync = self.sync
         if sync is None or not sync.logged_in or not sync.client.is_admin:
             return
-        ready = bool(sync.client.user.get("totp_enabled")) and sync.client.mfa
+        enabled = bool(sync.client.user.get("totp_enabled"))
+        ready = enabled and sync.client.mfa
         self.totp_box.setVisible(not ready)
         self.keys_box.setEnabled(ready)
         self.users_box.setEnabled(ready)
         if not ready:
-            self.status.setText("Nejprve zapněte dvoufázové ověření. Do té doby server správu klíčů odmítá.")
+            if enabled:
+                self.totp_hint.setText("Pro správu se odhlaste a přihlaste znovu i s kódem z autentikátoru.")
+            else:
+                # Kdo zná heslo správce, nesmí si 2FA zapnout sám přes internet – zapíná se na serveru.
+                self.totp_hint.setText(
+                    "Účet správce vydává licenční klíče, proto vyžaduje kód z autentikátoru. Zapíná se na serveru "
+                    "(v adresáři stacku) příkazem:<br><br><code>docker compose exec api python -m app.cli totp-setup "
+                    f"{sync.client.email}</code><br><br>Příkaz zobrazí QR kód pro autentikátor. Pak se tady "
+                    "odhlaste a přihlaste znovu i s kódem.")
+            self.status.setText("Správa klíčů je dostupná až po přihlášení s kódem z autentikátoru.")
             return
         client = sync.client
         sync.run("admin-load", lambda: (client.admin_keys(), client.admin_users()), self._loaded)
@@ -656,44 +621,6 @@ class AdminTab(QWidget):
                                "aktivní" if u.get("is_active") else "ZABLOKOVÁN"]) for u in users])
         active = sum(1 for k in keys if k.get("state") == "active")
         self.status.setText(f"Klíčů: {len(keys)} (platných {active}), účtů: {len(users)}.")
-
-    # ------------------------------------------------------------------ 2FA
-    def _totp_setup(self) -> None:
-        client = self.sync.client
-
-        def done(result):
-            if self._fail(result):
-                return
-            secret = str(result.get("secret", ""))
-            self._totp_uri = str(result.get("uri", ""))
-            self.totp_secret.setText(" ".join(secret[i:i + 4] for i in range(0, len(secret), 4)))
-            try:
-                self.totp_qr.setPixmap(qr_pixmap(self._totp_uri))
-                self.totp_qr.show()
-            except Exception as exc:  # noqa: BLE001 – bez QR kódu zůstává ruční zadání klíče
-                self.totp_qr.hide()
-                self.status.setText(f"QR kód nelze vykreslit ({exc}); zadejte klíč ručně.")
-                return
-            self.status.setText("Naskenujte QR kód autentikátorem a potvrďte šestimístným kódem.")
-            self.totp_code.setFocus()
-        self.sync.run("totp-setup", client.totp_setup, done)
-
-    def _totp_enable(self) -> None:
-        client, code = self.sync.client, self.totp_code.text().strip()
-        if not code:
-            return
-
-        def done(result):
-            if self._fail(result):
-                return
-            self.totp_code.clear()
-            self.totp_secret.clear()
-            self.totp_qr.clear()
-            self.totp_qr.hide()
-            self._totp_uri = ""
-            self.sync.changed.emit()
-            self.refresh()
-        self.sync.run("totp-enable", lambda: client.totp_enable(code), done)
 
     # ------------------------------------------------------------------ klíče a účty
     def _create_key(self) -> None:

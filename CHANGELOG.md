@@ -1,5 +1,10 @@
 # Změny
 
+## 1.4.1 (rozpracováno)
+- Karta Správa: dvoufázové ověření správce se zapíná na serveru příkazem (aplikace ho ukáže); odpadl QR kód v aplikaci.
+- Smazání profilu už nesmaže novější verzi, kterou mezitím upravil jiný počítač – ta se vrátí.
+- Vyžaduje synchronizační server 1.1.0.
+
 ## 1.4.0
 - **Profily** (Soukromý, Firemní, Zákazník…): každý má vlastní ping cíle (IP adresy, domény, sekce), upozornění a uložené IP/DNS předvolby. Přepnutí jedním kliknutím – pravé tlačítko na widgetu nebo na ikoně v liště → Profil. Stávající nastavení se převede do profilu „Soukromý“.
 - **Účet a automatická synchronizace** (volitelné, vlastní server): po přihlášení se profily samy nahrávají a stahují na další počítače. Když se stejný profil změní na dvou místech, aplikace se zeptá, kterou verzi zachovat. Bez přihlášení funguje vše lokálně jako dosud.

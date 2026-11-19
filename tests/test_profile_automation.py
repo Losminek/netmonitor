@@ -2,7 +2,6 @@
 import pytest
 from PySide6.QtWidgets import QMessageBox
 
-from netmonitor.core import qr
 from netmonitor.core.config import AppConfig, PingTarget
 from netmonitor.core.network_identity import identify
 from netmonitor.core.network_info import InterfaceInfo, NetworkSnapshot
@@ -21,39 +20,6 @@ def snap(kind="ethernet", ssid=None, gateway="192.168.1.1", ip="192.168.1.50"):
     iface = InterfaceInfo(name="eth0", display_name="Ethernet", kind=kind, is_up=True, ipv4=(ip,),
                           ssid=ssid, gateway=gateway)
     return NetworkSnapshot(active=iface, interfaces=(iface,), has_default_route=True, default_iface="eth0")
-
-
-# ---------------------------------------------------------------- QR kód
-def test_qr_matrix_is_a_valid_square_with_finder_patterns():
-    m = qr.matrix("otpauth://totp/NetMonitor:a%40example.org?secret=JBSWY3DPEHPK3PXP&issuer=NetMonitor")
-    assert len(m) >= 21 and all(len(row) == len(m) for row in m)
-    finder = [[True] * 7, [True] + [False] * 5 + [True]]
-    assert m[0][:7] == finder[0] and m[1][:7] == finder[1]            # levý horní roh
-    assert m[0][-7:] == finder[0] and m[-1][:7] == finder[0]          # pravý horní a levý dolní
-
-
-def test_qr_decodes_back_to_the_same_text(qapp, tmp_path):
-    cv2 = pytest.importorskip("cv2")
-    text = "otpauth://totp/NetMonitor:marcel%40zelina.eu?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=NetMonitor&digits=6&period=30"
-    path = tmp_path / "qr.png"
-    assert account_tabs.qr_pixmap(text).save(str(path))
-    decoded, _points, _raw = cv2.QRCodeDetector().detectAndDecode(cv2.imread(str(path)))
-    assert decoded == text
-
-
-def test_totp_setup_shows_qr(env, server):
-    ctrl, _store = env
-    server.add_user("admin@example.org", admin=True)
-    login(ctrl, "admin@example.org")
-    d = dialog(ctrl)
-    admin = d.admin_tab
-    assert admin.totp_qr.isHidden()
-    admin._totp_setup()
-    assert not admin.totp_qr.isHidden() and admin.totp_qr.pixmap().width() > 150
-    admin.totp_code.setText(server.code(admin.totp_secret.text().replace(" ", "")))
-    admin._totp_enable()
-    assert admin.totp_qr.isHidden() and admin.keys_box.isEnabled()
-    d.close()
 
 
 # ---------------------------------------------------------------- pozvánka

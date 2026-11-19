@@ -143,14 +143,14 @@ class ProfileStore:
         if gone.get("remote_id"):
             # Smazání se na serveru dokončí při nejbližší synchronizaci (i když je teď počítač offline).
             index.setdefault("pending_deletes", []).append({
-                "remote_id": gone["remote_id"], "account": gone.get("remote_account", ""),
-                "server": gone.get("remote_server", "")})
+                "remote_id": gone["remote_id"], "revision": int(gone.get("remote_revision", 0)) or None,
+                "account": gone.get("remote_account", ""), "server": gone.get("remote_server", "")})
         index["profiles"] = [p for p in index["profiles"] if p["id"] != profile_id]
         atomic_write_json(self.index_path, index)
         self._file(profile_id).unlink(missing_ok=True)
 
-    def pending_deletes(self, account: str, server: str) -> list[str]:
-        return [d["remote_id"] for d in self._read().get("pending_deletes", [])
+    def pending_deletes(self, account: str, server: str) -> list[tuple[str, int | None]]:
+        return [(d["remote_id"], d.get("revision")) for d in self._read().get("pending_deletes", [])
                 if d.get("account") == account and d.get("server") == server]
 
     def clear_pending_delete(self, remote_id: str) -> None:

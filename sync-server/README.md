@@ -3,8 +3,7 @@
 Samostatný server (FastAPI + PostgreSQL), se kterým NetMonitor 1.4 synchronizuje profily.
 Image: `ghcr.io/mersl77/netmonitor-sync` (sestavuje GitHub Actions z této složky).
 
-**Stav:** kód je pokrytý testy (server samostatně i s desktopovým klientem). Nasazení na
-`sync.zelina.eu` provádí správce podle postupu níže – z vývojové relace nasazeno nebylo.
+**Stav:** verze 1.1.0, nasazeno na `sync.zelina.eu`.
 
 ## Co server hlídá
 
@@ -13,11 +12,12 @@ Image: `ghcr.io/mersl77/netmonitor-sync` (sestavuje GitHub Actions z této slož
 | Registrace | jen s platným licenčním klíčem; `REGISTRATION_ENABLED=false` ji vypne úplně |
 | Licenční klíč | 100 bitů náhody, v databázi jen otisk SHA-256, počet použití, volitelná platnost, zneplatnění |
 | Zaplavení požadavky | limit na IP: 240 požadavků/min celkem, 10 přihlášení/5 min, 5 registrací/hod (HTTP 429) |
-| Hádání hesla | Argon2id; po 5 chybných pokusech se účet na 15 minut zamkne |
-| Správce | správa klíčů a účtů jen s dvoufázovým ověřením (TOTP), kód nelze použít dvakrát |
-| Relace | přístupový token 15 min, obnovovací token se při každém použití vymění; použití starého tokenu relaci ukončí |
+| Hádání hesla | Argon2id; po 5 chybných pokusech z jedné IP na jeden e-mail pauza 15 min (stejná odpověď pro existující i neexistující účet) |
+| Správce | správa jen s kódem z autentikátoru zadaným za posledních 12 h (`ADMIN_MFA_HOURS`); 2FA správce se zapíná jen na serveru |
+| Tajemství 2FA | v databázi šifrovaná klíčem odvozeným z `JWT_SECRET` |
+| Relace | přístupový token 15 min, obnovovací token se při každém použití vymění; použití staršího tokenu relaci ukončí (krátká tolerance pro ztracenou odpověď) |
 | Data | profil vidí jen jeho účet (ani správce ne); max. 20 profilů na účet, 512 KiB na profil |
-| Souběh | zápis profilu kontroluje revizi; konflikt = HTTP 409, nic se nepřepíše |
+| Souběh | zápis i smazání profilu kontrolují revizi; konflikt = HTTP 409, nic se nepřepíše |
 
 ## Nasazení přes SSH (Docker Compose)
 
@@ -31,10 +31,16 @@ if [ ! -f .env ]; then printf 'POSTGRES_PASSWORD=%s\nJWT_SECRET=%s\n' "$(openssl
 chmod 600 .env
 docker compose up -d --wait
 curl -s http://127.0.0.1:8766/health )
-docker compose exec api python -m app.cli create-admin
+docker compose exec api python -m app.cli create-admin      # zeptá se na e-mail, heslo a zapne 2FA
 ```
 
-Aktualizace serveru: `cd /opt/netmonitor-sync-v2 && docker compose pull && docker compose up -d --wait`.
+Aktualizace serveru: stáhnout nový `docker-compose.yml` (obsahuje pevnou verzi image) a
+`docker compose up -d --wait`. Databáze se při startu sama doplní o nové sloupce.
+
+**Za Cloudflare proxy** musí `FORWARDED_ALLOW_IPS` v `.env` obsahovat síť NPM i rozsahy Cloudflare
+(<https://www.cloudflare.com/ips/>), čárkami oddělené. Server pak bere IP klienta zprava první
+nedůvěryhodnou adresu z `X-Forwarded-For`, takže ji podvržená hlavička neovlivní.
+Proxy host v NPM by měl mít access list povolující jen Cloudflare a místní síť.
 
 ## Nasazení v Portaineru
 
@@ -67,11 +73,12 @@ Stack používá vlastní svazek `netmonitor-sync_db-data`. Rozpracovaný server
 ## Správa z příkazové řádky (Console kontejneru `api`)
 
 ```sh
-python -m app.cli create-admin                 # nový správce / povýšení existujícího účtu
+python -m app.cli create-admin                 # nový správce / povýšení existujícího účtu (+ 2FA)
+python -m app.cli totp-setup spravce@domena.cz # zapnutí / nové nastavení 2FA (QR kód v terminálu)
 python -m app.cli create-key "Pavel – kancelář" --days 30
 python -m app.cli list-users
 python -m app.cli reset-password uzivatel@domena.cz
-python -m app.cli reset-totp spravce@domena.cz # ztracený telefon správce
+python -m app.cli reset-totp spravce@domena.cz # ztracený telefon správce (hned nabídne nové 2FA)
 ```
 
 ## API
@@ -82,9 +89,9 @@ python -m app.cli reset-totp spravce@domena.cz # ztracený telefon správce
 | POST | `/auth/register` | `{email, password, license_key}` |
 | POST | `/auth/login` | `{email, password, totp_code?}` → přístupový a obnovovací token |
 | POST | `/auth/refresh`, `/auth/logout`, `/auth/password` | obnovení, odhlášení, změna hesla |
-| POST | `/auth/totp/setup`, `/auth/totp/enable` | zapnutí dvoufázového ověření |
+| POST | `/auth/totp/setup`, `/auth/totp/enable` | zapnutí 2FA běžným uživatelem (správce: jen `app.cli totp-setup`) |
 | GET/POST | `/profiles` | seznam / nový profil |
-| GET/PUT/DELETE | `/profiles/{id}` | čtení / zápis s revizí (i přejmenování) / smazání |
+| GET/PUT/DELETE | `/profiles/{id}` | čtení / zápis s revizí (i přejmenování) / smazání (`?revision=N`) |
 | GET/POST | `/admin/keys`, `/admin/keys/{id}/revoke` | licenční klíče (správce s 2FA) |
 | GET/POST | `/admin/users`, `/admin/users/{id}/disable\|enable` | účty (správce s 2FA) |
 
@@ -101,6 +108,7 @@ JWT_SECRET=$(openssl rand -hex 32) DATABASE_URL=sqlite:///dev.sqlite3 uvicorn ap
 ## Známá omezení
 
 - Limit požadavků je v paměti jednoho procesu (po restartu kontejneru se nuluje).
-- Schéma vzniká přes `create_all`; migrační nástroj (Alembic) zatím není potřeba ani nasazen.
+- Schéma vzniká přes `create_all` a nové sloupce doplňuje `upgrade_schema` při startu; Alembic zatím není.
+- Změna `JWT_SECRET` odhlásí všechny a znemožní ověřit 2FA – potom `reset-totp` u správců.
 - Obnova zapomenutého hesla e-mailem není – heslo resetuje správce příkazem `reset-password`.
 - Zálohování databáze (pg_dump svazku) si řeší správce serveru.

@@ -33,11 +33,12 @@ def client(app):
     return TestClient(app)
 
 
-def add_user(app, email="admin@example.org", admin=False, totp=False) -> str | None:
+def add_user(app, email="admin@example.org", admin=False, totp=False, sealed=True) -> str | None:
     secret = security.new_totp_secret() if totp else None
+    stored = security.seal(app.state.settings.jwt_secret, secret) if secret and sealed else secret
     with app.state.session_factory() as db:
         db.add(User(email=email, password_hash=security.hash_password(PASSWORD), is_admin=admin,
-                    totp_secret=secret, totp_enabled=totp))
+                    totp_secret=stored, totp_enabled=totp))
         db.commit()
     return secret
 
