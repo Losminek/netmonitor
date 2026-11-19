@@ -153,3 +153,20 @@ def test_account_action_delivers_error_and_next_result(service, caplog, error):
     service.run("test", lambda: {"ok": True}, results.append)
     wait_for(lambda: bool(results))
     assert results == [{"ok": True}]
+
+
+@pytest.mark.parametrize("blocked", ["same-key", "stopping"])
+def test_job_not_started_does_not_leave_busy(service, blocked):
+    """Úloha, kterou Controller odmítne spustit, nesmí nechat busy nastavené (L37)."""
+    if blocked == "same-key":
+        service.ctrl._busy.add("sync-login")
+    else:
+        service.ctrl._stopping = True
+    results = []
+    try:
+        service.login(EMAIL, PASSWORD, None, False, results.append)
+        assert len(results) == 1 and isinstance(results[0], SyncError)
+        assert not service.busy
+    finally:
+        service.ctrl._busy.discard("sync-login")
+        service.ctrl._stopping = False
