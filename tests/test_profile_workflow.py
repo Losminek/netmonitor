@@ -1,4 +1,6 @@
 """Profily a účet v GUI: přepínání, automatická synchronizace, registrace klíčem, správa (offscreen)."""
+import sys
+
 import pytest
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
@@ -231,6 +233,10 @@ def test_conflict_can_be_deferred_and_reopened(env, monkeypatch, qapp, dismiss):
             if dismiss in ("enter", "escape"):
                 key = Qt.Key.Key_Return if dismiss == "enter" else Qt.Key.Key_Escape
                 QTest.keyClick(box, key)
+                qapp.processEvents()
+                if box.isVisible() and sys.platform == "darwin":
+                    # Na macOS simulovaný Esc dialog v testu nezavře (Qt/Cocoa); únikové tlačítko je ověřené výše.
+                    box.escapeButton().click()
             elif dismiss == "later":
                 next(b for b in box.buttons() if b.text() == "Rozhodnu později").click()
             else:
