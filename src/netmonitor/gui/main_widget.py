@@ -502,7 +502,9 @@ class MainWidget(QWidget):
 
     def _update_profile_menu(self, act: QAction, menu: QMenu) -> None:
         """Název podmenu a zaškrtnutí aktivního profilu; položky se znovu vytvoří jen při změně seznamu."""
-        store = self.ctrl.profile_store
+        store, sub = self.ctrl.profile_store, act.menu()
+        if store is None or not isinstance(sub, QMenu):
+            return
         sep = next((a for a in menu.actions() if (a.data() or ("",))[0] == "profiles_separator"), None)
         try:
             profiles, active = store.list_profiles(), store.active_id()
@@ -514,10 +516,10 @@ class MainWidget(QWidget):
         act.setVisible(True)
         if sep is not None:
             sep.setVisible(True)
-        sub = act.menu()
-        current = next((p["name"] for p in profiles if p["id"] == active), "")
+        items = [(p["id"], p["name"]) for p in profiles]
+        current = next((name for pid, name in items if pid == active), "")
         act.setText(f"{tr('Profil')}: {current}")
-        key = repr([(p["id"], p["name"]) for p in profiles])
+        key = repr(items)
         if sub.property("profile_ids") != key:
             # Nový/přejmenovaný/smazaný profil: nová ID dostanou jen položky tohoto podmenu.
             for old in sub.actions():
@@ -526,10 +528,10 @@ class MainWidget(QWidget):
             for old_grp in sub.findChildren(QActionGroup):
                 old_grp.deleteLater()
             grp = QActionGroup(sub)
-            for p in profiles:
-                pa = QAction(p["name"], sub, checkable=True)
-                pa.setData(("profile", p["id"]))
-                pa.triggered.connect(lambda _=False, pid=p["id"]: self._switch_profile(pid))
+            for pid, name in items:
+                pa = QAction(name, sub, checkable=True)
+                pa.setData(("profile", pid))
+                pa.triggered.connect(lambda _=False, pid=pid: self._switch_profile(pid))
                 grp.addAction(pa)
                 sub.addAction(pa)
             sub.addSeparator()
