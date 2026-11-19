@@ -380,3 +380,22 @@ def test_ipv6_dns_blocks_apply_even_when_switching_to_automatic_dns(editor, monk
     assert "IPv6 DNS" in dialog.msg.text()
     assert not dialog.btn_apply.isEnabled()
     dialog._apply()
+
+
+def test_profile_ip_preset_survives_background_adapter_load(editor, monkeypatch):
+    """Předvolba z přepnutí profilu (1.4.0) se nesmí přepsat pozdě načteným stavem karty."""
+    dialog, ctrl, _ = editor
+    ctrl.cfg.network.ip_profiles = [{"name": "Kancelář", "dhcp": False, "ip": "198.51.100.30",
+                                     "mask": "255.255.255.0", "gateway": "198.51.100.1",
+                                     "dns_dhcp": False, "dns": ["192.0.2.53"]}]
+    monkeypatch.setattr(ctrl, "apply_ip", lambda *a: pytest.fail("Předvolba se nesmí použít sama"))
+    dialog.open_for("other-test", "Kancelář")
+    wait_for(lambda: not dialog._busy)
+    assert dialog.adapter.currentData() == "other-test"
+    assert dialog.ip.text() == "198.51.100.30" and dialog.netmask.text() == "255.255.255.0"
+    assert dialog.dns1.text() == "192.0.2.53" and dialog.rb_static.isChecked()
+    assert "Kancelář" in dialog.msg.text() and dialog.btn_apply.isEnabled()
+    # Další otevření bez předvolby už předvolbu znovu nenačte.
+    dialog.open_for("other-test")
+    wait_for(lambda: not dialog._busy)
+    assert dialog.ip.text() == "198.51.100.20"
