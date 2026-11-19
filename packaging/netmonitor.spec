@@ -83,8 +83,8 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "NetMonitor",
             "CFBundleDisplayName": "NetMonitor",
-            "CFBundleShortVersionString": "1.4.0",
-            "CFBundleVersion": "1.4.0",
+            "CFBundleShortVersionString": "1.4.1",
+            "CFBundleVersion": "1.4.1",
             "LSUIElement": True,                      # bez ikony v Docku – widget + ikona v menu baru
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",

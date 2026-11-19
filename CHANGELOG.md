@@ -1,9 +1,14 @@
 # Změny
 
-## 1.4.1 (rozpracováno)
-- Karta Správa: dvoufázové ověření správce se zapíná na serveru příkazem (aplikace ho ukáže); odpadl QR kód v aplikaci.
+## 1.4.1
+- **Přihlášení po chybě**: po špatném heslu, neplatném klíči nebo výpadku sítě už aplikace nezůstane viset na „Komunikuji se serverem…“ – další pokus jde hned, bez odhlášení a restartu.
+- **Start bez sítě**: uložené přihlášení se obnoví samo, jakmile je server zase dostupný.
+- **Konflikt profilu**: výchozí volba (Enter, Esc, zavření okna) je „Rozhodnu později“ a nic nepřepíše.
+- **Přepnutí profilu** mění jen ping cíle, prahy, upozornění a IP/DNS předvolby; vzhled, síťová karta, jazyk, autostart a aktualizace zůstávají podle počítače.
+- **Karta Správa**: dvoufázové ověření správce se zapíná na serveru příkazem (aplikace ho ukáže). Správa vyžaduje přihlášení s kódem z posledních 12 hodin.
 - Smazání profilu už nesmaže novější verzi, kterou mezitím upravil jiný počítač – ta se vrátí.
 - Vyžaduje synchronizační server 1.1.0.
+- Opravy od Daniela Lošáka (#24–#28).
 
 ## 1.4.0
 - **Profily** (Soukromý, Firemní, Zákazník…): každý má vlastní ping cíle (IP adresy, domény, sekce), upozornění a uložené IP/DNS předvolby. Přepnutí jedním kliknutím – pravé tlačítko na widgetu nebo na ikoně v liště → Profil. Stávající nastavení se převede do profilu „Soukromý“.
