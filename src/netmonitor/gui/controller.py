@@ -289,6 +289,9 @@ class Controller(QObject):
             if hasattr(mine, key):
                 setattr(a, key, getattr(mine, key))
         self.update_config(cfg)
+        # Snapshot nově aktivního profilu se musí zapsat i tehdy, když se běžící konfigurace
+        # nezměnila (např. liší se jen poloha okna, kterou zde přebíráme z tohoto počítače).
+        self._save_generation += 1
         self._save_timer.stop()
         self._save_now()
 

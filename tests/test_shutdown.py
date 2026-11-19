@@ -137,6 +137,22 @@ def test_shutdown_saves_latest_config_to_active_profile(ctrl, tmp_path):
     assert store.load(other).appearance.locked is False
 
 
+def test_profile_switch_writes_snapshot_even_without_config_change(ctrl, tmp_path):
+    """Přepnutí na profil, který se liší jen polohou okna: snapshot dostane polohu tohoto počítače."""
+    from netmonitor.core.profiles import ProfileStore
+
+    store = ProfileStore(tmp_path / "profiles")
+    ctrl.cfg.appearance.x = 100
+    store.initialize(ctrl.cfg)
+    ctrl.profile_store = store
+    other_cfg = ctrl.cfg.copy()
+    other_cfg.appearance.x = 900
+    other = store.create("Pracovní", other_cfg)
+    ctrl.switch_profile(other)
+    assert ctrl.cfg.appearance.x == 100
+    assert store.load(other).appearance.x == 100
+
+
 def test_shutdown_waits_for_running_ip_sequence(ctrl, monkeypatch, caplog):
     """Regrese B03: již běžící sekvence IP se dokončí před návratem shutdownu."""
     import netmonitor.platform as plat
