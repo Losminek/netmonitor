@@ -340,7 +340,14 @@ def test_wol_result_without_tray_characterization(cfg, controller_factory, monke
     # V testu se nespouštějí pozdější sondy ani skutečné odeslání WoL.
     monkeypatch.setattr(tools.QTimer, "singleShot", Mock())
     tools.wake(c, target)
-    if success:
+    status_dialog = getattr(tools, "WolDialog", None)   # po #5 (L12) výsledek ukazuje stavové okno
+    if success and status_dialog is not None:
+        d = tools._wol_dialogs[-1]
+        assert d.isVisible() and "Probouzecí paket odeslán" in d.status.text()
+        info.assert_not_called()
+        warning.assert_not_called()
+        d.close()
+    elif success:
         info.assert_called_once()
         assert "Probouzecí paket odeslán" in info.call_args.args[2]
         warning.assert_not_called()
