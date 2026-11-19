@@ -61,36 +61,31 @@ def test_immediate_shutdown_saves_latest_config(ctrl, update):
 
 
 @pytest.mark.parametrize("fail_first", [False, True])
-def test_newer_snapshot_survives_slow_save(ctrl, monkeypatch, fail_first):
-    """Regrese B01: novější revize se uloží i při obsazeném klíči save-config."""
-    entered, release = threading.Event(), threading.Event()
+def test_failed_save_keeps_revision_until_next_save(ctrl, monkeypatch, caplog, fail_first):
+    """Regrese B01 (zápis je od 1.4.0 synchronní): neuložená revize se nezahodí a novější se uloží."""
     save = cfgmod.save_config
     calls = []
 
-    def slow_save(cfg, path):
+    def flaky_save(cfg, path):
         calls.append(cfg.appearance.locked)
-        if len(calls) == 1:
-            entered.set()
-            assert release.wait(5)
-            if fail_first:
-                raise OSError("Test chyby prvního zápisu")
+        if fail_first and len(calls) == 1:
+            raise OSError("Test chyby prvního zápisu")
         save(cfg, path)
 
-    monkeypatch.setattr(cfgmod, "save_config", slow_save)
-    try:
-        ctrl.schedule_save()
-        ctrl._save_now()
-        assert entered.wait(2)
-        ctrl.cfg.appearance.locked = True
-        ctrl.schedule_save()
-        ctrl._save_timer.stop()
-        ctrl._save_now()  # debounce vypršel během prvního zápisu
-        release.set()
-        wait_for(lambda: len(calls) == 2 and "save-config" not in ctrl._busy)
-        assert cfgmod.load_config(ctrl.config_path).appearance.locked is True
-        assert calls == [False, True]
-    finally:
-        release.set()
+    monkeypatch.setattr(cfgmod, "save_config", flaky_save)
+    ctrl.schedule_save()
+    ctrl._save_timer.stop()
+    with caplog.at_level("ERROR"):
+        ctrl._save_scheduled()          # slot časovače chybu zaloguje, nevyhodí
+    assert ("revize zůstává neuložená" in caplog.text) is fail_first
+    ctrl._save_now()                    # bez nové změny zapíše jen dosud neuloženou revizi
+    assert calls == ([False, False] if fail_first else [False])
+    ctrl.cfg.appearance.locked = True
+    ctrl.schedule_save()
+    ctrl._save_timer.stop()
+    ctrl._save_scheduled()
+    assert calls[-1] is True
+    assert cfgmod.load_config(ctrl.config_path).appearance.locked is True
 
 
 @pytest.mark.parametrize("blocked", ["pinger", "resolver", "network"])
@@ -126,32 +121,20 @@ def test_shutdown_deadline_with_blocked_worker(ctrl, monkeypatch, blocked):
         watchdog.cancel()
 
 
-def test_shutdown_serializes_with_older_save(ctrl, monkeypatch):
-    """Regrese B01: rozběhnutý starší zápis nepřepíše poslední shutdown revizi."""
-    entered, release = threading.Event(), threading.Event()
-    save = cfgmod.save_config
+def test_shutdown_saves_latest_config_to_active_profile(ctrl, tmp_path):
+    """Regrese B01 s profily (1.4.0): poslední změna při ukončení patří i do aktivního profilu."""
+    from netmonitor.core.profiles import ProfileStore
 
-    def slow_save(cfg, path):
-        if not cfg.appearance.locked:
-            entered.set()
-            assert release.wait(5)
-        save(cfg, path)
-
-    monkeypatch.setattr(cfgmod, "save_config", slow_save)
-    ctrl.schedule_save()
-    ctrl._save_now()
-    assert entered.wait(2)
+    store = ProfileStore(tmp_path / "profiles")
+    store.initialize(ctrl.cfg)
+    ctrl.profile_store = store
+    other = store.create("Pracovní", ctrl.cfg.copy())
     ctrl.cfg.appearance.locked = True
-    ctrl.schedule_save()
-    timer = threading.Timer(0.1, release.set)
-    timer.start()
-    try:
-        ctrl.shutdown()
-        ctrl._bg.shutdown(timeout=1)
-        assert cfgmod.load_config(ctrl.config_path).appearance.locked is True
-    finally:
-        release.set()
-        timer.cancel()
+    ctrl.schedule_save()                # debounce ještě neproběhl
+    ctrl.shutdown()
+    assert cfgmod.load_config(ctrl.config_path).appearance.locked is True
+    assert store.load(store.active_id()).appearance.locked is True
+    assert store.load(other).appearance.locked is False
 
 
 def test_shutdown_waits_for_running_ip_sequence(ctrl, monkeypatch, caplog):
@@ -201,8 +184,7 @@ def test_shutdown_cancels_queued_work_and_saves(ctrl, monkeypatch):
         assert all(event.wait(2) for event in entered)
         ctrl.apply_ip(IpSettings(iface="test0"), calls.append)
         ctrl.cfg.appearance.locked = True
-        ctrl.schedule_save()
-        ctrl._save_now()  # zápis teprve čeká ve frontě
+        ctrl.schedule_save()            # debounce neproběhl, uloží až shutdown
         ctrl.shutdown()
         ctrl._run_bg("late", lambda: calls.append("late"))
         assert cfgmod.load_config(ctrl.config_path).appearance.locked is True

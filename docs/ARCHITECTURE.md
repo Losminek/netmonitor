@@ -46,15 +46,16 @@ src/netmonitor/
         │  heap (due, target)                 │ ping_host(): resolver → pinger (DNS nemá deadline)
         │  monotonic clock                    ▼
         │                               TargetStats.add() pod zámkem → snapshot → callback
- DaemonPool "bg_*" (3)  ← síťové info (každých 5 s), WAN/ISP (5 min), flush DB (60 s), zápis konfigurace
+ DaemonPool "bg_*" (3)  ← síťové info (každých 5 s), WAN/ISP (5 min), flush DB (60 s)
 ```
 
-- **I/O controlleru za běhu probíhá v pozadí.** Výjimkou je synchronní poslední zápis konfigurace při ukončení.
+- **Síťové a DB I/O controlleru za běhu probíhá v pozadí.** Výjimkou je zápis konfigurace (viz níže).
 - **Žádné překrývání** požadavků na stejný cíl (`_inflight`), žádná dávka "dohánění" po zpoždění.
 - **Uspání/probuzení**: skok wall-clock vs. monotonic → vymazání DNS cache, přeplánování, obnovení WAN/sítě.
 - **Změna sítě** (rozhraní/IP/brána/DNS/SSID) → totéž + přepnutí sondy brány.
-- **Konfigurace**: debounce 600 ms, revize se označují čítačem; po dokončení staršího zápisu se uloží novější
-  požadavek. Zápisy jsou serializované a atomické (`fsync` + `os.replace`).
+- **Konfigurace**: debounce 600 ms, revize se označují čítačem. Zápis `config.json` a aktivního profilu je
+  synchronní v hlavním vlákně (malý atomický JSON, `fsync` + `os.replace`), aby přepnutí profilu nepředběhl
+  starší zápis. Při chybě zůstane revize neuložená a zapíše se při dalším uložení, nejpozději při ukončení.
 - **Ukončení**: odmítnutí nových úloh, skrytí widgetu a zastavení časovačů → synchronní zápis poslední požadované
   revize konfigurace → zrušení čekajících úloh v pozadí → zahájení úklidu historie → `engine.stop(timeout)`.
   Historie tak flushuje souběžně s čekáním na visící síťové dotazy. Join scheduleru, aktuálního i vyřazených
