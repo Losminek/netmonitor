@@ -1,5 +1,8 @@
 # NetMonitor Sync – změny
 
+## 1.2.0
+- Správa: přehled zařízení účtu a odhlášení vybraného zařízení. Ukončené relace se po 30 dnech mažou.
+
 ## 1.1.0
 - Chybná přihlášení se počítají na dvojici IP + e-mail; odpověď je stejná pro existující i neexistující účet.
 - Dvoufázové ověření správce se zapíná jen na serveru (`python -m app.cli totp-setup`, QR kód v terminálu);

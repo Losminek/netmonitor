@@ -57,7 +57,16 @@ def current_auth(request: Request, authorization: str | None = Header(default=No
     if (user is None or not user.is_active or session is None or session.user_id != user.id
             or session.revoked_at is not None or aware(session.expires_at) <= now()):
         raise error(401, "unauthorized", "Relace byla ukončena. Přihlaste se znovu.")
+    touch(db, session, client_ip(request))
     return Auth(user=user, session=session, mfa=bool(session.mfa))
+
+
+def touch(db: Session, session: UserSession, ip: str) -> None:
+    """Poslední aktivita a IP zařízení pro přehled správce. Zapisuje se jen při změně nebo po 5 minutách."""
+    last = aware(session.last_used_at)
+    if session.ip != ip or last is None or last < now() - timedelta(minutes=5):
+        session.ip, session.last_used_at = ip[:45], now()
+        db.commit()
 
 
 def current_admin(request: Request, auth: Auth = Depends(current_auth)) -> Auth:

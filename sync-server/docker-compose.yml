@@ -24,7 +24,7 @@ services:
       retries: 10
 
   api:
-    image: ghcr.io/mersl77/netmonitor-sync:${TAG:-1.1.0}
+    image: ghcr.io/mersl77/netmonitor-sync:${TAG:-1.2.0}
     restart: unless-stopped
     depends_on:
       db:

@@ -76,15 +76,57 @@ def revoke_key(key_id: uuid.UUID, _: Auth = Depends(current_admin), db: Session 
     return key_dict(key, sorted(emails))
 
 
+def active_session(s: UserSession) -> bool:
+    return s.revoked_at is None and aware(s.expires_at) > now()
+
+
+def session_dict(s: UserSession) -> dict:
+    return {"id": str(s.id), "device": s.device, "ip": s.ip or "", "created_at": iso(s.created_at),
+            "last_used_at": iso(s.last_used_at), "active": active_session(s), "mfa": bool(s.mfa),
+            "revoked_at": iso(s.revoked_at)}
+
+
 @router.get("/users")
 def list_users(_: Auth = Depends(current_admin), db: Session = Depends(get_db)):
     counts = dict(db.execute(select(Profile.user_id, func.count()).group_by(Profile.user_id)).all())
     notes = {k.id: k.note for k in db.scalars(select(LicenseKey)).all()}
-    return [{"id": str(u.id), "email": u.email, "is_admin": u.is_admin, "is_active": u.is_active,
-             "totp_enabled": u.totp_enabled, "created_at": iso(u.created_at),
-             "last_login_at": iso(u.last_login_at), "profiles": counts.get(u.id, 0),
-             "key_note": notes.get(u.license_key_id, "")}
-            for u in db.scalars(select(User).order_by(User.created_at)).all()]
+    sessions: dict[uuid.UUID, list[UserSession]] = {}
+    for s in db.scalars(select(UserSession).order_by(UserSession.last_used_at.desc())).all():
+        sessions.setdefault(s.user_id, []).append(s)
+    result = []
+    for u in db.scalars(select(User).order_by(User.created_at)).all():
+        own = sessions.get(u.id, [])
+        latest = own[0] if own else None
+        result.append({"id": str(u.id), "email": u.email, "is_admin": u.is_admin, "is_active": u.is_active,
+                       "totp_enabled": u.totp_enabled, "created_at": iso(u.created_at),
+                       "last_login_at": iso(u.last_login_at), "profiles": counts.get(u.id, 0),
+                       "key_note": notes.get(u.license_key_id, ""),
+                       "last_ip": (latest.ip or "") if latest else "",
+                       "last_seen_at": iso(latest.last_used_at) if latest else None,
+                       "devices": sum(1 for s in own if active_session(s))})
+    return result
+
+
+@router.get("/users/{user_id}/sessions")
+def user_sessions(user_id: uuid.UUID, _: Auth = Depends(current_admin), db: Session = Depends(get_db)):
+    if db.get(User, user_id) is None:
+        raise error(404, "not_found", "Účet nenalezen.")
+    rows = db.scalars(select(UserSession).where(UserSession.user_id == user_id)
+                      .order_by(UserSession.last_used_at.desc())).all()
+    return [session_dict(s) for s in rows]
+
+
+@router.post("/sessions/{session_id}/revoke")
+def revoke_session(session_id: uuid.UUID, auth: Auth = Depends(current_admin), db: Session = Depends(get_db)):
+    session = db.get(UserSession, session_id)
+    if session is None:
+        raise error(404, "not_found", "Zařízení nenalezeno.")
+    if session.id == auth.session.id:
+        raise error(409, "self_change", "Vlastní přihlášení takto ukončit nelze – použijte Odhlásit.")
+    if session.revoked_at is None:
+        session.revoked_at = now()
+        db.commit()
+    return session_dict(session)
 
 
 def set_active(user_id: uuid.UUID, active: bool, auth: Auth, db: Session) -> dict:
