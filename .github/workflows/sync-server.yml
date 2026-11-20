@@ -78,7 +78,8 @@ jobs:
           token="$(json -d "{\"refresh_token\":\"$refresh\"}" "$api/auth/refresh" | python -c 'import json,sys; d=json.load(sys.stdin); print(d["access_token"]); open("/tmp/r","w").write(d["refresh_token"])')"
           json -H "Authorization: Bearer $token" -d '{"name":"Před upgradem","config":{"ping":{"targets":[]}}}' "$api/profiles" >/dev/null
           TAG=ci docker compose up -d --wait --wait-timeout 120 || { docker compose logs; exit 1; }
-          curl -fsS "$api/health" | grep -q '"version":"1.1.0"'
+          want="$(python -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('app/__init__.py').read()).group(1))")"
+          curl -fsS "$api/health" | grep -q "\"version\":\"$want\""
           token="$(json -d "{\"refresh_token\":\"$(cat /tmp/r)\"}" "$api/auth/refresh" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
           json -H "Authorization: Bearer $token" "$api/profiles" | grep -q 'Před upgradem'
           TAG=ci docker compose exec -T api python -m app.cli list-users | grep -q up@example.org

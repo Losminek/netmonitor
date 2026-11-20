@@ -269,3 +269,9 @@ class SyncClient:
 
     def admin_set_user_active(self, user_id: str, active: bool) -> dict:
         return self._request("POST", f"/admin/users/{UUID(user_id)}/{'enable' if active else 'disable'}", {})
+
+    def admin_user_sessions(self, user_id: str) -> list[dict]:
+        return self._request("GET", f"/admin/users/{UUID(user_id)}/sessions")
+
+    def admin_revoke_session(self, session_id: str) -> dict:
+        return self._request("POST", f"/admin/sessions/{UUID(session_id)}/revoke", {})

@@ -1,5 +1,8 @@
 # Změny
 
+## 1.4.2
+- Karta Správa: přehled zařízení účtu a odhlášení vybraného zařízení. Vyžaduje synchronizační server 1.2.0.
+
 ## 1.4.1
 - **Přihlášení po chybě**: po špatném heslu, neplatném klíči nebo výpadku sítě už aplikace nezůstane viset na „Komunikuji se serverem…“ – další pokus jde hned, bez odhlášení a restartu.
 - **Start bez sítě**: uložené přihlášení se obnoví samo, jakmile je server zase dostupný.

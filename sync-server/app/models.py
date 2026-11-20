@@ -63,6 +63,7 @@ class UserSession(Base):
     mfa: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # poslední ověřený kód
     rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(45), nullable=True)       # poslední IP zařízení (bez historie)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

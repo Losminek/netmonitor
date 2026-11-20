@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -75,12 +75,20 @@ def open_session(request: Request, db: Session, user: User, device: str, mfa: bo
     session_id = uuid.uuid4()
     token = security.new_refresh_token(session_id)
     session = UserSession(id=session_id, user_id=user.id, token_hash=security.sha256(token), device=device.strip()[:100],
-                          mfa=mfa, mfa_at=now() if mfa else None,
+                          mfa=mfa, mfa_at=now() if mfa else None, ip=client_ip(request)[:45],
                           expires_at=now() + timedelta(days=settings.refresh_days))
     db.add(session)
+    purge_old_sessions(db)
     user.last_login_at = now()
     db.commit()
     return token_response(request, user, session, token)
+
+
+def purge_old_sessions(db: Session) -> None:
+    """Ukončené a vypršelé relace (i s IP adresou) se po 30 dnech mažou."""
+    cutoff = now() - timedelta(days=30)
+    db.execute(delete(UserSession).where((UserSession.revoked_at < cutoff) | (UserSession.expires_at < cutoff))
+               .execution_options(synchronize_session=False))
 
 
 def token_response(request: Request, user: User, session: UserSession, refresh_token: str) -> dict:
@@ -186,6 +194,7 @@ def refresh(body: RefreshBody, request: Request, db: Session = Depends(get_db)):
     # Atomická výměna: stejný token obnoví relaci nejvýš jednou.
     rotated = db.execute(update(UserSession).where(UserSession.token_hash == digest, *valid).values(
         token_hash=security.sha256(token), previous_hash=digest, rotated_at=now(), last_used_at=now(),
+        ip=client_ip(request)[:45],
         expires_at=now() + timedelta(days=settings.refresh_days)
     ).execution_options(synchronize_session=False))
     if rotated.rowcount != 1:
@@ -193,7 +202,7 @@ def refresh(body: RefreshBody, request: Request, db: Session = Depends(get_db)):
         grace = now() - timedelta(seconds=settings.refresh_grace_s)
         rotated = db.execute(update(UserSession).where(
             UserSession.previous_hash == digest, UserSession.rotated_at > grace, *valid
-        ).values(token_hash=security.sha256(token), last_used_at=now()).execution_options(synchronize_session=False))
+        ).values(token_hash=security.sha256(token), last_used_at=now(), ip=client_ip(request)[:45]).execution_options(synchronize_session=False))
     if rotated.rowcount != 1:
         # Starší token téže relace = token byl zkopírován. Relace končí pro všechny jeho držitele.
         db.execute(update(UserSession).where(UserSession.id == session.id, UserSession.revoked_at.is_(None))

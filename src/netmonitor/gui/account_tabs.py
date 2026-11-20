@@ -5,9 +5,9 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QGuiApplication
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
-                               QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox,
+                               QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
+                               QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .. import __version__
 from ..core import sync_engine
@@ -564,9 +564,15 @@ class AdminTab(QWidget):
 
         self.users_box = QGroupBox("Účty")
         ul = QVBoxLayout(self.users_box)
-        self.users = table(["E-mail", "Klíč (poznámka)", "Profilů", "Poslední přihlášení", "Stav"])
+        self.users = table(["E-mail", "Klíč (poznámka)", "Profilů", "Zařízení", "Poslední aktivita",
+                            "Poslední IP", "Stav"])
+        self.users.setToolTip("Dvojklikem zobrazíte zařízení účtu")
+        self.users.itemDoubleClicked.connect(lambda _i: self._show_devices())
         ul.addWidget(self.users, 1)
         urow = QHBoxLayout()
+        self.btn_devices = QPushButton("Zařízení účtu…")
+        self.btn_devices.clicked.connect(self._show_devices)
+        urow.addWidget(self.btn_devices)
         self.btn_block = QPushButton("Zablokovat / odblokovat vybraný účet")
         self.btn_block.clicked.connect(self._toggle_user)
         reload_ = QPushButton("Obnovit")
@@ -623,7 +629,9 @@ class AdminTab(QWidget):
                               ", ".join(k.get("users", [])) or "—"]) for k in keys])
         fill(self.users, [(u, [u.get("email", "") + ("  (správce)" if u.get("is_admin") else ""),
                                u.get("key_note", "") or "—", str(u.get("profiles", 0)),
-                               when(u.get("last_login_at")),
+                               str(u.get("devices", 0)),
+                               when(u.get("last_seen_at") or u.get("last_login_at")),
+                               u.get("last_ip", "") or "—",
                                "aktivní" if u.get("is_active") else "ZABLOKOVÁN"]) for u in users])
         active = sum(1 for k in keys if k.get("state") == "active")
         self.status.setText(f"Klíčů: {len(keys)} (platných {active}), účtů: {len(users)}.")
@@ -665,6 +673,13 @@ class AdminTab(QWidget):
         self.sync.run("key-revoke", lambda: client.admin_revoke_key(key["id"]),
                       lambda r: None if self._fail(r) else self.refresh())
 
+    def _show_devices(self) -> None:
+        user = selected(self.users)
+        if not isinstance(user, dict):
+            return
+        DevicesDialog(self.sync, user, self).exec()
+        self.refresh()
+
     def _toggle_user(self) -> None:
         user = selected(self.users)
         if not isinstance(user, dict):
@@ -678,3 +693,58 @@ class AdminTab(QWidget):
         client = self.sync.client
         self.sync.run("user-toggle", lambda: client.admin_set_user_active(user["id"], activate),
                       lambda r: None if self._fail(r) else self.refresh())
+
+
+class DevicesDialog(QDialog):
+    """Zařízení jednoho účtu: název počítače, poslední IP a aktivita; odhlášení vybraného zařízení."""
+
+    def __init__(self, sync, user: dict, parent=None):
+        super().__init__(parent)
+        from . import theme
+        self.setStyleSheet(theme.DIALOG_QSS)
+        self.sync, self.user = sync, user
+        self.setWindowTitle(f"Zařízení – {user.get('email', '')}")
+        self.resize(760, 360)
+        layout = QVBoxLayout(self)
+        layout.addWidget(hint("Ukončená zařízení se ze serveru mažou po 30 dnech. Odhlášené zařízení se musí "
+                              "přihlásit znovu heslem."))
+        self.table = table(["Zařízení", "Poslední IP", "Poslední aktivita", "Přihlášeno", "Stav"])
+        layout.addWidget(self.table, 1)
+        row = QHBoxLayout()
+        self.btn_revoke = QPushButton("Odhlásit vybrané zařízení")
+        self.btn_revoke.clicked.connect(self._revoke)
+        close = QPushButton("Zavřít")
+        close.clicked.connect(self.accept)
+        row.addWidget(self.btn_revoke)
+        row.addStretch(1)
+        row.addWidget(close)
+        layout.addLayout(row)
+        self.status = hint("Načítám…")
+        layout.addWidget(self.status)
+        self.reload()
+
+    def reload(self) -> None:
+        client, uid = self.sync.client, self.user["id"]
+        self.sync.run("devices", lambda: client.admin_user_sessions(uid), self._loaded)
+
+    def _loaded(self, result) -> None:
+        if isinstance(result, Exception):
+            self.status.setText(f"Chyba: {result}")
+            return
+        fill(self.table, [(s, [s.get("device", "") or "neznámé", s.get("ip", "") or "—",
+                               when(s.get("last_used_at")), when(s.get("created_at")),
+                               "přihlášeno" if s.get("active") else "ukončeno"]) for s in result])
+        active = sum(1 for s in result if s.get("active"))
+        self.status.setText(f"Přihlášených zařízení: {active}, ukončených: {len(result) - active}.")
+
+    def _revoke(self) -> None:
+        session = selected(self.table)
+        if not isinstance(session, dict) or not session.get("active"):
+            return
+        if QMessageBox.question(self, "Odhlásit zařízení",
+                                f"Odhlásit zařízení „{session.get('device', '')}“ ({session.get('ip', '')})?") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        client = self.sync.client
+        self.sync.run("device-revoke", lambda: client.admin_revoke_session(session["id"]),
+                      lambda r: self.status.setText(f"Chyba: {r}") if isinstance(r, Exception) else self.reload())
