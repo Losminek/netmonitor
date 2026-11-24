@@ -328,7 +328,9 @@ class ProfilesTab(QWidget):
                 QMessageBox.information(self, "Profily", "Aktivní profil smazat nelze. Nejprve přepněte na jiný.")
                 return
             rec = store.record(pid)
-            extra = "\n\nProfil se smaže i ze serveru a tím ze všech vašich počítačů." if rec.get("remote_id") else ""
+            extra = ("\n\nProfil se při nejbližší synchronizaci smaže i ze serveru; "
+                     "na ostatních počítačích zůstane jako „jen místní“." if rec.get("remote_id") else
+                     "\n\nProfil se smaže jen z tohoto počítače.")
             if QMessageBox.question(self, "Smazat profil", f"Opravdu smazat profil „{rec['name']}“?{extra}") \
                     != QMessageBox.StandardButton.Yes:
                 return
