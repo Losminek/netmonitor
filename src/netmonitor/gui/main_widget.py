@@ -17,7 +17,8 @@ from .controller import Controller
 from .i18n import tr
 from .network_panel import NetworkPanel
 from .ping_panel import PingPanel
-from .widgets import GlowTitle
+from .widgets import GlowTitle, show_dialog
+from .wol_dialog import WolDevicesDialog, add_wol_menu
 
 log = logging.getLogger(__name__)
 BASE_W, BASE_H = 600, 850
@@ -118,6 +119,7 @@ class MainWidget(QWidget):
         super().__init__(None)
         self.ctrl = ctrl
         ctrl.shutdown_started.connect(self.hide)
+        self._wol_devices_dialog: WolDevicesDialog | None = None
         self.setWindowTitle("NetMonitor")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
@@ -552,6 +554,7 @@ class MainWidget(QWidget):
         m.addAction(tr("Nastavení…"), self.open_settings.emit)
         m.addAction(tr("Historie…"), lambda: self.open_history.emit(""))
         m.addAction(tr("Test rychlosti internetu…"), self.open_speedtest.emit)
+        add_wol_menu(m, self.ctrl, self.open_wol_devices)
         m.addAction(tr("Nastavit IP adresu…"), self._open_current_ipconfig)
         m.addSeparator()
         mode = m.addMenu(tr("Režim zobrazení"))
@@ -686,6 +689,11 @@ class MainWidget(QWidget):
     def _open_current_ipconfig(self) -> None:
         act_if = self.ctrl.network.active if self.ctrl.network else None
         self.open_ipconfig.emit(act_if.name if act_if else "")
+
+    def open_wol_devices(self) -> None:
+        if self._wol_devices_dialog is None:
+            self._wol_devices_dialog = WolDevicesDialog(self.ctrl, self)
+        show_dialog(self._wol_devices_dialog)
 
     def _set_appearance(self, **kw) -> None:
         cfg = self.ctrl.cfg.copy()

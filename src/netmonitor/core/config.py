@@ -22,7 +22,7 @@ from ..utils.validation import host_kind
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 CONFIG_FILENAME = "config.json"
 
 ICON_CHOICES = ("auto", "globe", "server", "dns", "wifi", "router", "modem", "box", "cloud")
@@ -202,6 +202,70 @@ class HistoryConfig:
 
 
 @dataclass
+class WolDevice:
+    name: str = ""
+    mac: str = ""
+    broadcast: str = ""
+    port: int = 9
+    host: str = ""
+    id: str = field(default_factory=new_id)
+
+    def normalized(self) -> "WolDevice":
+        d = copy.copy(self)
+        for key in ("name", "mac", "broadcast", "host"):
+            setattr(d, key, str(getattr(d, key) or "").strip())
+        d.id = str(d.id or new_id())
+        return d
+
+    def validate(self) -> list[str]:
+        from .wol import validate_destination
+        errs = []
+        if not self.name.strip():
+            errs.append("Název nesmí být prázdný")
+        try:
+            if type(self.port) is not int:
+                raise ValueError("Port musí být celé číslo 1–65535")
+            validate_destination(self.mac, self.broadcast or None, self.port)
+        except ValueError as e:
+            errs.append(str(e))
+        if self.host and host_kind(self.host) == "invalid":
+            errs.append("Neplatná IP adresa nebo doména pro ověření")
+        return errs
+
+
+@dataclass
+class WolConfig:
+    devices: list[WolDevice] = field(default_factory=list)
+
+
+def wol_devices_from_list(items: Any) -> list[WolDevice]:
+    from .wol import parse_mac
+    out = []
+    seen = set()
+    names = {f.name for f in fields(WolDevice)}
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        device = WolDevice(**{k: v for k, v in item.items() if k in names}).normalized()
+        try:
+            parse_mac(device.mac)
+        except ValueError:
+            log.warning("Přeskakuji neplatné zařízení WoL")
+            continue
+        device.name = device.name or device.mac
+        device.port = int(_clamp(device.port, 1, 65535, 9))
+        if host_kind(device.broadcast) != "ipv4":
+            device.broadcast = ""
+        if host_kind(device.host) == "invalid":
+            device.host = ""
+        if device.id in seen:
+            device.id = new_id()
+        seen.add(device.id)
+        out.append(device)
+    return out
+
+
+@dataclass
 class AppConfig:
     general: GeneralConfig = field(default_factory=GeneralConfig)
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
@@ -209,6 +273,7 @@ class AppConfig:
     ping: PingConfig = field(default_factory=PingConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
+    wol: WolConfig = field(default_factory=WolConfig)
     schema_version: int = SCHEMA_VERSION
 
     # --- serializace -------------------------------------------------------
@@ -235,6 +300,8 @@ class AppConfig:
         cfg.ping.targets = targets_from_list(raw_targets) if isinstance(raw_targets, list) else default_targets()
         cfg.notifications = _load_dc(NotificationConfig, data.get("notifications", {}), "notifications")
         cfg.history = _load_dc(HistoryConfig, data.get("history", {}), "history")
+        raw_wol = data.get("wol")
+        cfg.wol = WolConfig(wol_devices_from_list(raw_wol.get("devices") if isinstance(raw_wol, dict) else None))
         return cfg.normalized()
 
     def normalized(self) -> "AppConfig":
@@ -273,6 +340,7 @@ class AppConfig:
         nt.high_latency_duration_s = int(_clamp(nt.high_latency_duration_s, 10, 86400, 120))
         self.history.retention_days = int(_clamp(self.history.retention_days, 1, 3650, 90))
         self.general.language = self.general.language if self.general.language in ("cs", "en") else "cs"
+        self.wol.devices = wol_devices_from_list([asdict(d) for d in self.wol.devices])
         return self
 
     def copy(self) -> "AppConfig":
@@ -347,20 +415,15 @@ def targets_from_list(items: Any) -> list[PingTarget]:
 
 
 def default_targets() -> list[PingTarget]:
-    """Výchozí seznam ze specifikace (5.1). Stejná IP u dvou zařízení je povolená."""
-    spec = [
-        ("Zelina", "zelina.eu", "globe", True),
-        ("Seznam", "seznam.cz", "globe", True),
-        ("O2 DNS Primár", "160.218.161.60", "dns", True),
-        ("O2 DNS Sekundár", "194.228.211.33", "dns", True),
-        ("Google DNS", "8.8.8.8", "dns", True),
-        ("Huawei anténa", "192.168.1.1", "wifi", False),
-        ("Greenpacket H5", "192.168.0.1", "wifi", False),
-        ("SB3 router", "192.168.0.1", "router", False),
-        ("O2 modem", "10.0.0.138", "modem", False),
-        ("Smart Box", "10.0.1.138", "box", False),
+    """Neutrální sada pro nové instalace a ruční obnovu; uložené cíle se nemigrují."""
+    return [
+        new_section("Internet"),
+        PingTarget(name="Cloudflare DNS", host="1.1.1.1", icon="dns"),
+        PingTarget(name="Google DNS", host="8.8.8.8", icon="dns"),
+        PingTarget(name="Cloudflare", host="cloudflare.com", icon="globe"),
+        # Informační sekce: bránu automaticky měří Controller jako __gateway__.
+        new_section("Místní síť"),
     ]
-    return [PingTarget(name=n, host=h, icon=i, show_rtt=r) for n, h, i, r in spec]
 
 
 def new_section(name: str) -> PingTarget:
@@ -389,6 +452,8 @@ def migrate_dict(data: dict) -> dict:
             if not url or url.startswith("https://github.com/mersl77/netmonitor"):
                 gen.pop("update_url", None)
                 gen["check_updates"] = True
+    if ver < 4:   # oddělený seznam WoL; MAC u ping cílů se automaticky nepřesouvají
+        data.setdefault("wol", {"devices": []})
     data["schema_version"] = SCHEMA_VERSION
     return data
 
