@@ -205,9 +205,9 @@ class SyncClient:
     def totp_setup(self) -> dict:
         return self._request("POST", "/auth/totp/setup", {})
 
-    def totp_enable(self, code: str) -> None:
+    def totp_enable(self, code: str, password: str) -> None:
         with self._lock:
-            self._accept(self._request("POST", "/auth/totp/enable", {"code": code}))
+            self._accept(self._request("POST", "/auth/totp/enable", {"code": code, "password": password}))
 
     # ------------------------------------------------------------------ profily
     def profiles(self) -> list[dict]:

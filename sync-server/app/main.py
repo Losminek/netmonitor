@@ -36,7 +36,7 @@ def prepare_database(engine, settings) -> None:
     with Session(engine) as db:          # tajemství TOTP z 1.0.0 se zašifrují
         for user in db.scalars(select(User).where(User.totp_secret.is_not(None))).all():
             if not security.is_sealed(user.totp_secret):
-                user.totp_secret = security.seal(settings.jwt_secret, user.totp_secret)
+                user.totp_secret = security.seal(settings.seal_key, user.totp_secret)
         db.commit()
 
 

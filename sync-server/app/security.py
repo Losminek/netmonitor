@@ -37,9 +37,23 @@ def sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def new_refresh_token(session_id) -> str:
-    """<id relace>.<tajemství> – podle id server pozná i starý (ukradený) token téže relace."""
-    return f"{session_id.hex}.{secrets.token_urlsafe(48)}"
+def new_refresh_token(session_id, server_secret: str) -> str:
+    """<id relace>.<tajemství>.<podpis> – podle id server pozná i starý (ukradený) token téže relace,
+    podle podpisu, že token opravdu vydal (vymyšlený token se znalostí id relaci neukončí)."""
+    body = f"{session_id.hex}.{secrets.token_urlsafe(48)}"
+    return f"{body}.{_refresh_mac(server_secret, body)}"
+
+
+def _refresh_mac(server_secret: str, body: str) -> str:
+    key = hashlib.sha256(b"netmonitor-refresh-v1\0" + server_secret.encode("utf-8")).digest()
+    mac = hmac.new(key, body.encode("ascii", "replace"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).rstrip(b"=").decode("ascii")
+
+
+def refresh_token_issued(server_secret: str, token: str) -> bool:
+    """True, pokud token nese platný podpis serveru (tokeny do 1.2.0 podpis nemají)."""
+    body, sep, mac = token.rpartition(".")
+    return bool(sep) and body.count(".") == 1 and hmac.compare_digest(mac, _refresh_mac(server_secret, body))
 
 
 def refresh_session_id(token: str):

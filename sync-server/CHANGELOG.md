@@ -1,5 +1,12 @@
 # NetMonitor Sync – změny
 
+## 1.2.1
+- Zapnutí dvoufázového ověření vyžaduje aktuální heslo.
+- Tolerance pro ztracenou odpověď při obnově přihlášení platí pro každý token jen jednou.
+- Obnovovací tokeny jsou podepsané serverem; relaci ukončí jen opakované použití tokenu, který server vydal.
+- `FORWARDED_ALLOW_IPS` ve výchozím stavu nevěří žádné síti; nastavte IP kontejneru NPM (a rozsahy Cloudflare).
+- Nový volitelný `TOTP_KEY` pro tajemství 2FA. Nedešifrovatelné tajemství vrací srozumitelnou chybu 503 místo 500.
+
 ## 1.2.0
 - Správa: přehled zařízení účtu a odhlášení vybraného zařízení. Ukončené relace se po 30 dnech mažou.
 

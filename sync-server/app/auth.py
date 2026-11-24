@@ -1,6 +1,7 @@
 """Registrace licenčním klíčem, přihlášení, rotace obnovovacích tokenů a dvoufázové ověření."""
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from datetime import timedelta
@@ -15,6 +16,7 @@ from . import security
 from .deps import Auth, client_ip, current_auth, error, get_db, limit
 from .models import LicenseKey, User, UserSession, aware, now
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 MIN_PASSWORD = 10
@@ -47,6 +49,11 @@ class CodeBody(BaseModel):
     code: str = Field(max_length=12)
 
 
+class TotpEnableBody(CodeBody):
+    # Zapnutí 2FA potvrzuje heslo: samotný (třeba ukradený) token k převzetí účtu nestačí.
+    password: str = Field(default="", max_length=200)
+
+
 def normalize_email(raw: str) -> str:
     email = raw.strip().casefold()
     if len(email) > 254 or not EMAIL.fullmatch(email):
@@ -73,7 +80,7 @@ def open_session(request: Request, db: Session, user: User, device: str, mfa: bo
     for old in active[settings.max_sessions - 1:]:
         old.revoked_at = now()
     session_id = uuid.uuid4()
-    token = security.new_refresh_token(session_id)
+    token = security.new_refresh_token(session_id, settings.jwt_secret)
     session = UserSession(id=session_id, user_id=user.id, token_hash=security.sha256(token), device=device.strip()[:100],
                           mfa=mfa, mfa_at=now() if mfa else None, ip=client_ip(request)[:45],
                           expires_at=now() + timedelta(days=settings.refresh_days))
@@ -166,7 +173,12 @@ def login(body: LoginBody, request: Request, db: Session = Depends(get_db)):
 
 def consume_totp(request: Request, db: Session, user: User, code: str) -> bool:
     """Ověří kód a atomicky jej spotřebuje – stejný kód nelze použít dvakrát ani souběžně."""
-    secret = security.unseal(request.app.state.settings.jwt_secret, user.totp_secret)
+    try:
+        secret = security.unseal(request.app.state.settings.seal_key, user.totp_secret)
+    except RuntimeError:
+        log.error("Tajemství 2FA účtu %s nelze dešifrovat (změněný JWT_SECRET/TOTP_KEY?).", user.id)
+        raise error(503, "totp_unavailable", "Dvoufázové ověření teď na serveru nejde ověřit. "
+                    "Kontaktujte správce serveru.") from None
     step = security.totp_verify(secret, code, user.totp_last_step) if secret else None
     if step is None:
         return False
@@ -189,7 +201,7 @@ def refresh(body: RefreshBody, request: Request, db: Session = Depends(get_db)):
             (UserSession.token_hash == digest) | (UserSession.previous_hash == digest)))
     if session is None:
         raise error(401, "unauthorized", "Relace vypršela. Přihlaste se znovu.")
-    token = security.new_refresh_token(session.id)
+    token = security.new_refresh_token(session.id, settings.jwt_secret)
     valid = (UserSession.id == session.id, UserSession.revoked_at.is_(None), UserSession.expires_at > now())
     # Atomická výměna: stejný token obnoví relaci nejvýš jednou.
     rotated = db.execute(update(UserSession).where(UserSession.token_hash == digest, *valid).values(
@@ -200,10 +212,18 @@ def refresh(body: RefreshBody, request: Request, db: Session = Depends(get_db)):
     if rotated.rowcount != 1:
         # Klient mohl o odpověď přijít (uspání, výpadek Wi-Fi) a zkouší předchozí token znovu.
         grace = now() - timedelta(seconds=settings.refresh_grace_s)
+        # Tolerance platí jen jednou: previous_hash se smaže, další opakování už je krádež.
         rotated = db.execute(update(UserSession).where(
             UserSession.previous_hash == digest, UserSession.rotated_at > grace, *valid
-        ).values(token_hash=security.sha256(token), last_used_at=now(), ip=client_ip(request)[:45]).execution_options(synchronize_session=False))
+        ).values(token_hash=security.sha256(token), previous_hash=None, last_used_at=now(),
+                 ip=client_ip(request)[:45]).execution_options(synchronize_session=False))
     if rotated.rowcount != 1:
+        issued = (sid is None or digest == session.previous_hash
+                  or security.refresh_token_issued(settings.jwt_secret, body.refresh_token))
+        if not issued:
+            # Token, který server nevydal (jen se zná id relace) – relaci neukončí.
+            db.rollback()
+            raise error(401, "unauthorized", "Relace vypršela. Přihlaste se znovu.")
         # Starší token téže relace = token byl zkopírován. Relace končí pro všechny jeho držitele.
         db.execute(update(UserSession).where(UserSession.id == session.id, UserSession.revoked_at.is_(None))
                    .values(revoked_at=now()).execution_options(synchronize_session=False))
@@ -256,17 +276,19 @@ def totp_setup(request: Request, auth: Auth = Depends(current_auth), db: Session
     if auth.user.totp_enabled:
         raise error(409, "totp_already_enabled", "Dvoufázové ověření je už zapnuté.")
     secret = security.new_totp_secret()
-    auth.user.totp_secret = security.seal(request.app.state.settings.jwt_secret, secret)
+    auth.user.totp_secret = security.seal(request.app.state.settings.seal_key, secret)
     db.commit()
     return {"secret": secret, "uri": security.totp_uri(secret, auth.user.email)}
 
 
 @router.post("/totp/enable")
-def totp_enable(body: CodeBody, request: Request, auth: Auth = Depends(current_auth),
+def totp_enable(body: TotpEnableBody, request: Request, auth: Auth = Depends(current_auth),
                 db: Session = Depends(get_db)):
     limit(request, "login", request.app.state.settings.rate_login)
     user = auth.user
     _no_web_enrollment_for_admin(user)
+    if not security.verify_password(user.password_hash, body.password):
+        raise error(401, "invalid_credentials", "Současné heslo nesouhlasí.")
     if user.totp_enabled:
         raise error(409, "totp_already_enabled", "Dvoufázové ověření je už zapnuté.")
     if not user.totp_secret:

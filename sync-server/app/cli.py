@@ -91,7 +91,7 @@ def main(argv=None, db_factory=None, server_secret: str | None = None) -> int:
         engine = make_engine(settings.database_url)
         prepare_database(engine, settings)
         db_factory = sessionmaker(engine, expire_on_commit=False)
-        server_secret = settings.jwt_secret
+        server_secret = settings.seal_key
     with db_factory() as db:
         if args.cmd == "create-admin":
             email = input("E-mail správce: ").strip().casefold()
