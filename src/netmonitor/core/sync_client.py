@@ -110,7 +110,8 @@ class SyncClient:
     def _request(self, method: str, path: str, payload: dict | None = None):
         """Přihlášený požadavek. Po vypršení přístupového tokenu jej jednou obnoví a zopakuje.
 
-        Opakování je bezpečné: odpověď 401 znamená, že server požadavek neprovedl.
+        Opakujeme jen 401 s kódem unauthorized nebo bez kódu (např. odpověď proxy).
+        Chybné heslo nebo TOTP kód se nesmí opakováním započítat do limitu dvakrát.
         """
         with self._lock:
             if not self.access_token and self.refresh_token:
@@ -120,7 +121,7 @@ class SyncClient:
             try:
                 return self._send(method, path, payload, auth=True)
             except SyncError as exc:
-                if exc.status != 401 or not self.refresh_token:
+                if exc.status != 401 or exc.code not in ("unauthorized", "") or not self.refresh_token:
                     raise
             self._refresh()
             return self._send(method, path, payload, auth=True)
