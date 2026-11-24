@@ -520,7 +520,7 @@ def test_traceroute_start_failure(monkeypatch):
     """Regrese B05: chybu spuštění doplňuje český kontext, chybějící nástroj je samostatný stav."""
     monkeypatch.setattr(traceroute, "system_command", lambda *args: None)
     _, err = traceroute.run("192.0.2.1", lambda h: None)
-    assert "nenalezen" in err or "Není nainstalován" in err
+    assert "nalezen" in err or "Není nainstalován" in err      # Linux „nenalezen“, Windows „nebyl nalezen“
     monkeypatch.setattr(traceroute, "system_command", lambda *args: (["missing-program"], "traceroute"))
 
     def fail(*args, **kwargs):

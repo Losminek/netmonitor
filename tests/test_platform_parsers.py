@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import pytest
 from netmonitor.core.config import AppConfig
 from netmonitor.gui.controller import Controller
 from netmonitor.platform import linux, macos, windows
+from netmonitor.utils import proc
 
 
 @pytest.fixture
@@ -218,6 +220,33 @@ def test_windows_classify():
     assert windows.classify(6, "Realtek PCIe GbE") == "ethernet"
     assert windows.classify(53, "WireGuard Tunnel") == "vpn"
     assert windows.classify(6, "TAP-Windows Adapter V9") == "vpn"
+
+
+@pytest.mark.parametrize("multiple", [False, True], ids=["object", "array"])
+def test_windows_powershell_utf8_adapter_names(monkeypatch, multiple):
+    """Regrese L22: PowerShell musí poslat UTF-8 a zachovat diakritiku názvu i popisu."""
+    name = "Připojení k místní síti"
+    adapter = {"n": name, "d": "Síťový adaptér", "g": ["192.0.2.1"], "s": ["192.0.2.53"]}
+    data = [adapter, {"n": "Záložní síť", "d": "Virtuální adaptér", "g": [], "s": []}] if multiple else adapter
+    output = (json.dumps(data, ensure_ascii=False) + "\r\n").encode("utf-8")
+    commands = []
+
+    def fake_run(args, **kwargs):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=output, stderr=b"")
+
+    monkeypatch.setattr(proc.shutil, "which", lambda _: "powershell")
+    monkeypatch.setattr(proc.subprocess, "run", fake_run)
+    result = windows._adapter_details_powershell()
+
+    assert result[name] == {"display_name": name, "description": "Síťový adaptér", "kind": "other",
+                            "gateways": ["192.0.2.1"], "dns": ["192.0.2.53"], "up": True}
+    if multiple:
+        assert result["Záložní síť"]["gateways"] == []
+        assert result["Záložní síť"]["dns"] == []
+    assert len(commands) == 1
+    assert commands[0][:4] == ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+    assert commands[0][4].startswith("[Console]::OutputEncoding=[Text.Encoding]::UTF8; ")
 
 
 SCUTIL = """DNS configuration

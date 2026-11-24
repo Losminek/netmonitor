@@ -98,7 +98,21 @@ def diagnose(cfg: cfgmod.AppConfig, gui: dict | None = None) -> int:
     return 0
 
 
+def _utf8_redirected_streams() -> None:
+    """Windows: výstup přesměrovaný do souboru/roury je v kódování ANSI (cp1252) a čeština v něm
+    shodí aplikaci (UnicodeEncodeError). Konzole (WriteConsoleW) zůstává beze změny."""
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and not stream.isatty() and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
+    _utf8_redirected_streams()
     args = parse_args(argv)
     ensure_dirs()
     setup_logging(args.debug)

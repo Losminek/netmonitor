@@ -345,9 +345,8 @@ def test_environment_server_overrides_saved_settings(service, monkeypatch, overr
         svc.deleteLater()
 
 
-@pytest.mark.xfail(reason="Časový limit ukončení řeší PR #15; L47 do controlleru nezasahuje", strict=True)
 def test_shutdown_has_bounded_wait_for_running_sync(service, monkeypatch):
-    """Otevřené v PR #15: i po _stopping dobíhá celá série požadavků."""
+    """Ukončení nečeká na celou sérii požadavků běžící synchronizace (časový limit z PR #15)."""
     authorize(service)
     # První GET a dva zápisy tvoří jeden běžící job v poolu controlleru.
     service.ctrl.profile_store.create("Druhý", service.ctrl.cfg.copy())

@@ -57,7 +57,7 @@ def test_corrupt_index_is_not_silently_overwritten(tmp_path):
     store.initialize(AppConfig.from_dict({}))
     backups = list(root.glob("profile-index.json.bad-*"))
     assert len(backups) == 1
-    assert json.loads(backups[0].read_text())["active"] == "bad"
+    assert json.loads(backups[0].read_text(encoding="utf-8"))["active"] == "bad"
     assert store.record(store.active_id())["name"] == "Obnovené aktuální nastavení"
 
 

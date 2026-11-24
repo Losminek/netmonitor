@@ -160,7 +160,7 @@ def test_recovery_autosave_never_overwrites_existing_snapshot(tmp_path, damage):
     first = store.active_id()
     second = store.create("Druhý", config("198.51.100.1"))
     snapshots = {pid: store._file(pid).read_bytes() for pid in (first, second)}
-    data = json.loads(store.index_path.read_text())
+    data = json.loads(store.index_path.read_text(encoding="utf-8"))
     if damage == "unreadable":
         store.index_path.write_text("{", encoding="utf-8")
     else:
@@ -187,7 +187,7 @@ def test_recovery_autosave_never_overwrites_existing_snapshot(tmp_path, damage):
 def test_read_without_current_refuses_invalid_active(tmp_path):
     store = ProfileStore(tmp_path)
     store.initialize(config())
-    data = json.loads(store.index_path.read_text())
+    data = json.loads(store.index_path.read_text(encoding="utf-8"))
     data["active"] = 3
     write_index(store, data)
     raw = store.index_path.read_bytes()
@@ -234,7 +234,7 @@ def test_invalid_or_duplicate_name_is_replaced(tmp_path, name):
     store.initialize(config())
     active = store.active_id()
     other = store.create("Druhý", config("198.51.100.1"))
-    data = json.loads(store.index_path.read_text())
+    data = json.loads(store.index_path.read_text(encoding="utf-8"))
     data["profiles"][1]["name"] = name
     write_index(store, data)
     raw = store._file(other).read_bytes()
@@ -295,7 +295,7 @@ def test_name_only_repair_preserves_server_binding(tmp_path, name):
     store.bind_network(pid, "wifi:test", "Testovací síť")
     original = store.record(pid)
     expected_name = store.unique_name(name if isinstance(name, str) else "Profil", skip_id=pid)
-    data = json.loads(store.index_path.read_text())
+    data = json.loads(store.index_path.read_text(encoding="utf-8"))
     next(p for p in data["profiles"] if p["id"] == pid)["name"] = name
     write_index(store, data)
     snapshot = store._file(pid).read_bytes()
@@ -314,7 +314,7 @@ def test_unbind_clears_recovered_flag(tmp_path, local_only):
     store.initialize(config())
     pid = store.active_id()
     store.bind_remote(pid, str(uuid4()), 3, "test@example.com", "https://example.com", "hash")
-    data = json.loads(store.index_path.read_text())
+    data = json.loads(store.index_path.read_text(encoding="utf-8"))
     data["profiles"][0].update(local_only=True, recovered=True)
     write_index(store, data)
 
