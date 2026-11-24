@@ -40,12 +40,21 @@ class Settings:
     login_failures: tuple[int, int] = (5, 900)
     refresh_grace_s: int = 120          # opakované použití právě vyměněného tokenu (ztracená odpověď)
     admin_mfa_hours: int = 12           # správa vyžaduje kód z autentikátoru zadaný v této době
+    totp_key: str = ""                  # klíč pro šifrování tajemství 2FA; prázdné = JWT_SECRET
+
+    @property
+    def seal_key(self) -> str:
+        """Klíč pro tajemství 2FA. Samostatný TOTP_KEY dovolí změnit JWT_SECRET bez ztráty 2FA."""
+        return self.totp_key or self.jwt_secret
 
 
 def load() -> Settings:
     secret = _secret("JWT_SECRET")
     if len(secret) < 32:
         raise RuntimeError("JWT_SECRET musí mít alespoň 32 znaků (např. `openssl rand -hex 32`).")
+    totp_key = _secret("TOTP_KEY")
+    if totp_key and len(totp_key) < 32:
+        raise RuntimeError("TOTP_KEY musí mít alespoň 32 znaků (např. `openssl rand -hex 32`).")
     url = os.environ.get("DATABASE_URL", "").strip()
     if not url:
         password = _secret("POSTGRES_PASSWORD")
@@ -57,7 +66,7 @@ def load() -> Settings:
             h=os.environ.get("POSTGRES_HOST", "db"), port=_int("POSTGRES_PORT", 5432),
             d=quote(os.environ.get("POSTGRES_DB", "netmonitor"), safe=""))
     return Settings(
-        database_url=url, jwt_secret=secret,
+        database_url=url, jwt_secret=secret, totp_key=totp_key,
         access_minutes=_int("ACCESS_TOKEN_MINUTES", 15),
         refresh_days=_int("REFRESH_TOKEN_DAYS", 60),
         registration_enabled=os.environ.get("REGISTRATION_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"),

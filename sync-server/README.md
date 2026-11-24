@@ -37,8 +37,12 @@ docker compose exec api python -m app.cli create-admin      # zeptá se na e-mai
 Aktualizace serveru: stáhnout nový `docker-compose.yml` (obsahuje pevnou verzi image) a
 `docker compose up -d --wait`. Databáze se při startu sama doplní o nové sloupce.
 
-**Za Cloudflare proxy** musí `FORWARDED_ALLOW_IPS` v `.env` obsahovat síť NPM i rozsahy Cloudflare
-(<https://www.cloudflare.com/ips/>), čárkami oddělené. Server pak bere IP klienta zprava první
+**Za reverzní proxy** musí `FORWARDED_ALLOW_IPS` v `.env` obsahovat IP kontejneru NPM a za Cloudflare
+i jeho rozsahy (<https://www.cloudflare.com/ips/>), čárkami oddělené. Ne celou síť `172.16.0.0/12`:
+hlavičku `X-Forwarded-For` by pak mohl podvrhnout kterýkoli kontejner v síti i proces na hostu
+(přes publikovaný port). IP kontejneru NPM zjistíte příkazem
+`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' <kontejner-npm>`;
+aby se po restartu neměnila, dejte NPM v jeho stacku pevnou adresu (`ipv4_address`). Server pak bere IP klienta zprava první
 nedůvěryhodnou adresu z `X-Forwarded-For`, takže ji podvržená hlavička neovlivní.
 Proxy host v NPM by měl mít access list povolující jen Cloudflare a místní síť.
 
@@ -53,6 +57,8 @@ Proxy host v NPM by měl mít access list povolující jen Cloudflare a místní
    | `JWT_SECRET` | min. 32 znaků, např. výstup `openssl rand -hex 32` |
    | `PROXY_NETWORK` | Docker síť reverzní proxy (výchozí `nginx-proxy-manager_default`) |
    | `API_BIND` | volitelné, výchozí `127.0.0.1:8766` |
+   | `FORWARDED_ALLOW_IPS` | IP kontejneru NPM, za Cloudflare i jeho rozsahy (viz výše) |
+   | `TOTP_KEY` | volitelné, klíč pro tajemství 2FA (min. 32 znaků); výchozí je `JWT_SECRET` |
 
 3. **Deploy the stack.** Kontrola na hostiteli: `curl -s http://127.0.0.1:8766/health`.
 4. V Nginx Proxy Manageru vytvořit Proxy Host `sync.zelina.eu` → `netmonitor-sync-api`, port `8000`
@@ -109,6 +115,9 @@ JWT_SECRET=$(openssl rand -hex 32) DATABASE_URL=sqlite:///dev.sqlite3 uvicorn ap
 
 - Limit požadavků je v paměti jednoho procesu (po restartu kontejneru se nuluje).
 - Schéma vzniká přes `create_all` a nové sloupce doplňuje `upgrade_schema` při startu; Alembic zatím není.
-- Změna `JWT_SECRET` odhlásí všechny a znemožní ověřit 2FA – potom `reset-totp` u správců.
+- Změna `JWT_SECRET` odhlásí všechny. Tajemství 2FA jsou šifrovaná klíčem `TOTP_KEY`, a když není
+  zadaný, klíčem `JWT_SECRET`. Při změně `JWT_SECRET` bez `TOTP_KEY` proto nastavte `TOTP_KEY` na
+  původní `JWT_SECRET`, jinak se nepřihlásí **žádný** uživatel s 2FA (server vrátí 503
+  `totp_unavailable`) a každému je nutné spustit `reset-totp`.
 - Obnova zapomenutého hesla e-mailem není – heslo resetuje správce příkazem `reset-password`.
 - Zálohování databáze (pg_dump svazku) si řeší správce serveru.
