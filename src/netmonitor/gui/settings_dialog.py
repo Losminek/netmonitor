@@ -1,5 +1,6 @@
-"""Dialog nastavení. Každá změna se okamžitě promítne do widgetu i monitoringu
-(a s krátkou prodlevou uloží do config.json)."""
+"""Dialog nastavení. Změny se živě promítají do widgetu i monitoringu
+a s krátkou prodlevou uloží do config.json. Posuvníky průhlednosti se slučují po 50 ms.
+"""
 from __future__ import annotations
 
 import logging
@@ -7,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Callable
+
+from shiboken6 import isValid
 
 from PySide6.QtCore import QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices
@@ -43,8 +46,12 @@ def hint(text: str) -> QLabel:
 class TargetDialog(QDialog):
     """Přidání/úprava jednoho cíle s validací."""
 
-    def __init__(self, target: PingTarget | None, parent=None):
+    def __init__(self, target: PingTarget | None, parent=None, *, ctrl: Controller | None = None):
         super().__init__(parent)
+        self.ctrl = ctrl
+        self._lookup_pending = False
+        self._finished = False
+        self.finished.connect(self._dialog_finished)
         self.setWindowTitle("Upravit cíl" if target else "Přidat cíl")
         self.setStyleSheet(theme.DIALOG_QSS)
         self.t = target or PingTarget(name="", host="")
@@ -73,6 +80,7 @@ class TargetDialog(QDialog):
         self.mac = QLineEdit(self.t.mac)
         self.mac.setPlaceholderText("pro Wake-on-LAN, např. 04:D9:F5:15:34:86 (nepovinné)")
         self.btn_mac = QPushButton("Zjistit")
+        self.btn_mac.setEnabled(ctrl is not None)
         self.btn_mac.setToolTip("Pingne zařízení a přečte jeho MAC z ARP tabulky (musí být zapnuté a v této síti)")
         self.btn_mac.clicked.connect(self._detect_mac)
         mac_row = QHBoxLayout()
@@ -117,25 +125,36 @@ class TargetDialog(QDialog):
                           mac=self.mac.text().strip(), wol_broadcast=self.wol_bc.text().strip())
 
     def _detect_mac(self) -> None:
-        from PySide6.QtWidgets import QApplication
-
-        from ..core import wol
-        from ..core.ping_engine import Resolver, ping_host, select_pinger
+        if self.ctrl is None or self._lookup_pending:
+            return
         host = self.host.text().strip()
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            ip, _ = Resolver().resolve(host) if host else (None, "")
-            mac = None
-            if ip:
-                ping_host(ip, 0.8, select_pinger(), Resolver())
-                mac = wol.arp_lookup(ip)
-        finally:
-            QApplication.restoreOverrideCursor()
-        if mac:
-            self.mac.setText(mac)
-            self.err.setText("")
-        else:
-            self.err.setText("MAC se nepodařilo zjistit – zařízení musí být zapnuté a ve stejné síti (ARP).")
+        if not host or host_kind(host) == "invalid":
+            self.err.setText("Zadejte platnou IP adresu nebo doménu.")
+            return
+        old_mac = self.mac.text()
+        self._lookup_pending = True
+        self.btn_mac.setEnabled(False)
+        self.btn_mac.setText("Zjišťuji…")
+        self.err.setText("")
+
+        def finished(res):
+            if not isValid(self) or self._finished:
+                return
+            self._lookup_pending = False
+            self.btn_mac.setEnabled(True)
+            self.btn_mac.setText("Zjistit")
+            if self.host.text().strip() != host or self.mac.text() != old_mac:
+                self.err.setText("Host nebo MAC se během zjišťování změnily; výsledek nebyl použit.")
+                return
+            mac, err = res
+            if mac:
+                self.mac.setText(mac)
+            self.err.setText(err)
+
+        self.ctrl.detect_mac(f"mac-editor-{id(self)}", host, finished)
+
+    def _dialog_finished(self, _result: int) -> None:
+        self._finished = True
 
     def _accept(self) -> None:
         if self.mac.text().strip():
@@ -290,6 +309,9 @@ class SettingsDialog(QDialog):
         self.resize(820, 640)
         self._loading = False
         self._binds = []
+        self._pending_appearance: dict[str, float] = {}
+        self._appearance_timer = QTimer(self, singleShot=True, interval=50)
+        self._appearance_timer.timeout.connect(self._flush_appearance)
         lay = QVBoxLayout(self)
         self.tabs = QTabWidget()
         lay.addWidget(self.tabs)
@@ -335,12 +357,30 @@ class SettingsDialog(QDialog):
         if self._loading:
             return
         cfg = self.ctrl.cfg.copy()
+        self._appearance_timer.stop()
+        for key, value in self._pending_appearance.items():
+            setattr(cfg.appearance, key, value)
+        self._pending_appearance.clear()
         fn(cfg)
         self._applying = True
         try:
             self.ctrl.update_config(cfg)
         finally:
             self._applying = False
+
+    def _queue_appearance(self, key: str, value: float) -> None:
+        if not self._loading:
+            self._pending_appearance[key] = value
+            if not self._appearance_timer.isActive():
+                self._appearance_timer.start()
+
+    def _flush_appearance(self) -> None:
+        if self._pending_appearance:
+            self._apply(lambda cfg: None)
+
+    def done(self, result: int) -> None:
+        self._flush_appearance()
+        super().done(result)
 
     def _setter(self, section: str, key: str, conv=lambda v: v):
         return lambda v: self._apply(lambda c: setattr(getattr(c, section), key, conv(v)))
@@ -373,6 +413,7 @@ class SettingsDialog(QDialog):
             def later():
                 self._reload_pending = False
                 if self.isVisible() and not self._loading:
+                    self._flush_appearance()
                     self.load()
             QTimer.singleShot(0, later)
 
@@ -493,7 +534,7 @@ class SettingsDialog(QDialog):
 
         def glass_changed(x: int) -> None:
             self.glass_lbl.setText(f"{x} %" + ("  neprůhledné" if x == 0 else "  jen text" if x == 100 else ""))
-            self._apply(lambda c: setattr(c.appearance, "glass_alpha", 1 - x / 100))
+            self._queue_appearance("glass_alpha", 1 - x / 100)
         self.glass.valueChanged.connect(glass_changed)
         gr = QHBoxLayout()
         gr.addWidget(self.glass, 1)
@@ -505,7 +546,7 @@ class SettingsDialog(QDialog):
 
         def opacity_changed(x: int) -> None:
             self.opacity_lbl.setText(f"{x} %")
-            self._apply(lambda c: setattr(c.appearance, "opacity", 1 - x / 100))
+            self._queue_appearance("opacity", 1 - x / 100)
         self.opacity.valueChanged.connect(opacity_changed)
         orow = QHBoxLayout()
         orow.addWidget(self.opacity, 1)
@@ -704,7 +745,7 @@ class SettingsDialog(QDialog):
         self._fill_table()
 
     def _add_target(self) -> None:
-        d = TargetDialog(None, self)
+        d = TargetDialog(None, self, ctrl=self.ctrl)
         if d.exec():
             t = d.result_target()
             anchor = self._selected_id()
@@ -736,7 +777,7 @@ class SettingsDialog(QDialog):
                 self._apply(fn)
                 self._fill_table()
             return
-        d = TargetDialog(t, self)
+        d = TargetDialog(t, self, ctrl=self.ctrl)
         if d.exec():
             nt = d.result_target()
             self._apply(lambda c: c.ping.targets.__setitem__(
