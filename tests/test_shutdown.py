@@ -245,9 +245,9 @@ def test_process_exits_with_blocked_dns_and_background(tmp_path):
         # Event se záměrně neuvolní: testujeme konec interpreteru s visícími workery.
     ''')
     root = Path(__file__).resolve().parents[1]
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root / "src"), str(root))))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root / "src"), str(root))), PYTHONIOENCODING="utf-8")
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)], env=env,
-                            capture_output=True, text=True, timeout=6)
+                            capture_output=True, encoding="utf-8", errors="replace", timeout=6)
     assert result.returncode == 0, result.stderr
     assert "shutdown dokončen" in result.stdout
 

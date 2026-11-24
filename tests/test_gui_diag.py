@@ -158,7 +158,7 @@ def test_collector_offscreen(monkeypatch, fallback):
 def _run_main(tmp_path, flags, *, setup="", environment=None):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"network": {"external_api": False, "gateway_probe": False},
-                                  "general": {"check_updates": False}, "ping": {"targets": []}}))
+                                  "general": {"check_updates": False}, "ping": {"targets": []}}), encoding="utf-8")
     # Bez sítě a bez údajů lokálních rozhraní i u původního --diagnose.
     code = """
 import sys
@@ -176,7 +176,7 @@ with patch('netmonitor.core.network_info.NetworkInfoProvider.snapshot', return_v
     if environment is not None:
         env = environment
     return subprocess.run([sys.executable, "-c", code, *flags, "--config", str(config)],
-                          env=env, capture_output=True, text=True, timeout=20)
+                          env=env, capture_output=True, encoding="utf-8", errors="replace", timeout=20)
 
 
 @pytest.mark.parametrize("flags", [["--diagnose"], ["--diagnose-gui"], ["--diagnose", "--diagnose-gui"]])
