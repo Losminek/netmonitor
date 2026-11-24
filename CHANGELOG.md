@@ -1,5 +1,18 @@
 # Změny
 
+## 1.4.3
+- **Wake-on-LAN – seznam zařízení**: zařízení k probuzení se ukládají zvlášť, nemusí být mezi ping cíli. Pravé tlačítko na widgetu nebo na ikoně v liště → Probudit zařízení… nebo Uložená zařízení WoL. Ověření probuzení funguje i u vypnutých cílů a zjištění MAC adresy nezamrazí okno.
+- **Nové instalace** začínají s neutrálními výchozími ping cíli. Stávající nastavení se nemění.
+- **Synchronizace**: chybné heslo nebo kód 2FA se po obnově přihlášení neposílá znovu; odhlášení během obnovy přihlášení platí; přihlašovací token se ukládá atomicky (bez rozepsaného souboru po pádu).
+- **Poškozený seznam profilů** neshodí start: zazálohuje se, obnoví a aktuální nastavení se uloží jako profil „Obnovené aktuální nastavení“.
+- **Stabilita**: poškozený `config.json` nebo mezipaměť WAN se při startu obnoví místo pádu; ukončení aplikace má časový limit a neztratí poslední změnu nastavení; po změně cíle nebo vypnutí WAN se nezapočítávají zastaralé výsledky.
+- **Změna nastavení** přenačte jen to, co se změnilo; limit souběžných pingů platí hned.
+- **Nástroje**: traceroute jde spolehlivě zrušit a ukáže skutečnou chybu; test rychlosti nezapočítává chyby HTTP a neúplné přenosy; hodinový graf v Historii po restartu ukazuje i starší data; nastavení IP správně předvyplní vybranou kartu.
+- **Linux**: menu ikony v GNOME po změně stavu nepřestane reagovat; dialogy z menu ikony se otevřou v popředí; bez oznamovací oblasti zůstane widget ovladatelný a upozornění se zobrazí přímo ve widgetu; autostart z AppImage.
+- **Windows**: `--diagnose` přesměrovaný do souboru už nepadá na diakritice; build kontroluje kroky Inno Setup.
+- Diagnostika prostředí Qt v logu a přes `--diagnose-gui`; fonty v balíčku; testy pull requestů na Windows, macOS a Linuxu.
+- Opravy od Daniela Lošáka (#4–#22, #34–#36).
+
 ## 1.4.2
 - Karta Správa: přehled zařízení účtu a odhlášení vybraného zařízení. Vyžaduje synchronizační server 1.2.0.
 
