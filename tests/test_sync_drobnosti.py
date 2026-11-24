@@ -163,7 +163,7 @@ def test_business_401_is_not_retried(monkeypatch, action, code):
         if action == "password":
             client.change_password("chybne-testovaci-heslo", "nove-testovaci-heslo")
         else:
-            client.totp_enable("000000")
+            client.totp_enable("000000", "test-heslo-123")
     assert error.value.code == code
     assert requests == ["/auth/password" if action == "password" else "/auth/totp/enable"]
 
