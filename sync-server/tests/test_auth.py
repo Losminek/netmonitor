@@ -223,8 +223,10 @@ def test_enabling_totp_replaces_all_sessions(app, client):
     old = login(client, "user@example.org")
     stolen = old.json()["refresh_token"]                      # zkopírováno před zapnutím 2FA
     setup = client.post("/auth/totp/setup", json={}, headers=bearer(old)).json()
-    assert client.post("/auth/totp/enable", json={"code": "000000"}, headers=bearer(old)).status_code == 401
-    enabled = client.post("/auth/totp/enable", json={"code": code(setup["secret"])}, headers=bearer(old))
+    assert client.post("/auth/totp/enable", json={"code": "000000", "password": PASSWORD},
+                       headers=bearer(old)).status_code == 401
+    enabled = client.post("/auth/totp/enable", json={"code": code(setup["secret"]), "password": PASSWORD},
+                          headers=bearer(old))
     body = enabled.json()
     assert enabled.status_code == 200 and body["mfa"] is True and body["refresh_token"] != stolen
     assert client.post("/auth/refresh", json={"refresh_token": stolen}).status_code == 401
@@ -307,3 +309,62 @@ def test_totp_matches_rfc6238_vector():
     assert security.totp_code(secret, 59 // 30) == "287082"
     assert security.totp_verify(secret, "287082", at=59) == 1
     assert security.totp_verify(secret, "287082", last_step=1, at=59) is None
+
+
+def test_enabling_totp_needs_the_current_password(app, client):
+    """Samotný (třeba ukradený) token k zapnutí 2FA a převzetí účtu nestačí."""
+    add_user(app, "user@example.org")
+    r = login(client, "user@example.org")
+    setup = client.post("/auth/totp/setup", json={}, headers=bearer(r)).json()
+    for body in ({"code": code(setup["secret"])},
+                 {"code": code(setup["secret"]), "password": "spatne-heslo-123"}):
+        res = client.post("/auth/totp/enable", json=body, headers=bearer(r))
+        assert res.status_code == 401 and res.json()["detail"]["code"] == "invalid_credentials"
+    assert client.get("/auth/me", headers=bearer(r)).json()["totp_enabled"] is False
+    assert login(client, "user@example.org").status_code == 200        # účet dál bez 2FA
+
+
+def test_lost_response_tolerance_is_single_use(app, client):
+    add_user(app, "user@example.org")
+    first = login(client, "user@example.org").json()["refresh_token"]
+    assert client.post("/auth/refresh", json={"refresh_token": first}).status_code == 200   # „ztracená“
+    retry = client.post("/auth/refresh", json={"refresh_token": first})
+    assert retry.status_code == 200
+    # druhé opakování téhož tokenu v okně = přehrání ukradeného tokenu → relace končí
+    assert client.post("/auth/refresh", json={"refresh_token": first}).status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": retry.json()["refresh_token"]}).status_code == 401
+
+
+def test_forged_token_with_known_session_id_does_not_end_the_session(app, client):
+    add_user(app, "user@example.org")
+    real = login(client, "user@example.org").json()["refresh_token"]
+    sid = real.split(".")[0]
+    other = security.new_refresh_token(__import__("uuid").uuid4(), "y" * 48).split(".", 1)[1]
+    for forged in (f"{sid}.cokoliv", f"{sid}.{other}", f"{sid}.abc.def"):
+        assert client.post("/auth/refresh", json={"refresh_token": forged}).status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": real}).status_code == 200
+
+
+def test_unsigned_token_from_1_2_0_still_rotates(app, client):
+    from app.models import UserSession
+    add_user(app, "user@example.org")
+    login(client, "user@example.org")
+    with app.state.session_factory() as db:
+        s = db.scalar(select(UserSession))
+        legacy = f"{s.id.hex}.{'a' * 64}"                          # formát 1.1.0–1.2.0 bez podpisu
+        s.token_hash = security.sha256(legacy)
+        db.commit()
+    r = client.post("/auth/refresh", json={"refresh_token": legacy})
+    assert r.status_code == 200 and security.refresh_token_issued("x" * 48, r.json()["refresh_token"])
+    assert client.post("/auth/refresh", json={"refresh_token": r.json()["refresh_token"]}).status_code == 200
+
+
+def test_changed_jwt_secret_gives_clear_error_and_totp_key_keeps_2fa(tmp_path):
+    url = f"sqlite:///{tmp_path / 'db.sqlite3'}"
+    first = create_app(make_settings(database_url=url))
+    secret = add_user(first, "user@example.org", totp=True)
+    changed = TestClient(create_app(make_settings(database_url=url, jwt_secret="z" * 48)))
+    r = login(changed, "user@example.org", secret=secret)
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "totp_unavailable"
+    kept = TestClient(create_app(make_settings(database_url=url, jwt_secret="w" * 48, totp_key="x" * 48)))
+    assert login(kept, "user@example.org", secret=secret).status_code == 200
