@@ -432,8 +432,7 @@ def wake(ctrl, target: PingTarget, parent=None) -> None:
     """Otevře stav probuzení; zjištění MAC a ověřovací pingy běží na pozadí."""
     for old in list(_wol_dialogs):
         if old.ctrl is ctrl and old.target.id == target.id and (old.busy() or old.isVisible()):
-            old.show()
-            old.raise_()
+            show_dialog(old)
             if not old.busy():
                 old.target = replace(target)
                 old.start()
@@ -443,5 +442,5 @@ def wake(ctrl, target: PingTarget, parent=None) -> None:
             old.deleteLater()
     d = WolDialog(ctrl, target)
     _wol_dialogs.append(d)                     # držet Qt objekt až do doručení posledního výsledku
-    d.show()
+    show_dialog(d)
     d.start()
