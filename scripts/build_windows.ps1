@@ -29,9 +29,13 @@ function Find-Python {
 
 $py = Find-Python
 Write-Host "==> Python: $py" -ForegroundColor Cyan
-if (-not (Test-Path .venv-build)) { & $py -m venv .venv-build }
+if (-not (Test-Path .venv-build)) {
+    & $py -m venv .venv-build
+    if ($LASTEXITCODE -ne 0) { throw "Vytvoření venv selhalo (kód $LASTEXITCODE)" }
+}
 $vpy = ".\.venv-build\Scripts\python.exe"
 & $vpy -m pip install --upgrade pip | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Upgrade pip selhal (kód $LASTEXITCODE)" }
 & $vpy -m pip install -r requirements-dev.txt pillow
 if ($LASTEXITCODE -ne 0) { throw "pip install selhal" }
 
@@ -41,7 +45,7 @@ $missingIcons = $iconFiles | Where-Object { -not (Test-Path -Path "src/netmonito
 if ($Icons -or $missingIcons) {
     Write-Host "==> Ikony" -ForegroundColor Cyan
     & $vpy scripts\make_icons.py
-    if ($LASTEXITCODE -ne 0) { throw "Generování ikon selhalo" }
+    if ($LASTEXITCODE -ne 0) { throw "Vytvoření ikon selhalo (kód $LASTEXITCODE)" }
 }
 
 if (-not $SkipTests) {
@@ -66,8 +70,11 @@ if (-not $NoInstaller) {
     $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
               "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($iscc) {
+        $installer = "dist\NetMonitor-1.4.2-setup.exe"
         & $iscc packaging\windows\netmonitor.iss
-        Write-Host "==> Instalátor: dist\NetMonitor-1.4.2-setup.exe" -ForegroundColor Green
+        if ($LASTEXITCODE -ne 0) { throw "Inno Setup selhal (kód $LASTEXITCODE)" }
+        if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Instalátor nebyl vytvořen: $installer" }
+        Write-Host "==> Instalátor: $installer" -ForegroundColor Green
     } else {
         Write-Host "Inno Setup 6 nenalezen – instalátor přeskočen (winget install JRSoftware.InnoSetup)" -ForegroundColor Yellow
     }
