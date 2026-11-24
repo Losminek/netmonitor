@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import base64
 import json
-import os
+import logging
 import sys
 from pathlib import Path
 
+from .config import atomic_write_json
 from ..utils.paths import config_dir
+
+log = logging.getLogger(__name__)
 
 FILE = "sync-session.json"
 
@@ -47,20 +50,19 @@ class SecretStore:
         self.path = path or config_dir() / FILE
 
     def save(self, server: str, email: str, refresh_token: str) -> None:
+        # Odstranit i případný token z nedokončeného zápisu starší verze.
+        try:
+            self.path.with_suffix(".tmp").unlink(missing_ok=True)
+        except OSError:
+            log.warning("Nepodařilo se odstranit pozůstatek přihlašovací relace.")
         raw = refresh_token.encode("utf-8")
         if sys.platform == "win32":
             payload = {"scheme": "dpapi", "token": base64.b64encode(_dpapi(raw, True)).decode("ascii")}
         else:
             payload = {"scheme": "file", "token": refresh_token}
         payload.update(server=server, email=email)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        if sys.platform != "win32":
-            os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        # mkstemp v pomocníku vytváří unikátní soubor s právy 0600 už od vzniku.
+        atomic_write_json(self.path, payload)
 
     def load(self) -> tuple[str, str, str] | None:
         """(server, e-mail, obnovovací token), nebo None. Poškozený soubor se tiše ignoruje."""
@@ -80,5 +82,9 @@ class SecretStore:
     def clear(self) -> None:
         try:
             self.path.unlink()
+        except OSError:
+            pass
+        try:
+            self.path.with_suffix(".tmp").unlink(missing_ok=True)
         except OSError:
             pass
