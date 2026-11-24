@@ -8,8 +8,8 @@
       -Icons          vynutit regeneraci všech ikon (jinak jen pokud některá chybí)
   Výstup:
       dist\NetMonitor\NetMonitor.exe            (přenosná verze – celá složka)
-      dist\NetMonitor-1.4.2-win64.zip
-      dist\NetMonitor-1.4.2-setup.exe           (pokud je nainstalovaný Inno Setup 6)
+      dist\NetMonitor-1.4.3-win64.zip
+      dist\NetMonitor-1.4.3-setup.exe           (pokud je nainstalovaný Inno Setup 6)
   Nemění nic mimo složku projektu (venv v .venv-build).
 #>
 param([switch]$SkipTests, [switch]$NoInstaller, [switch]$Icons)
@@ -61,7 +61,7 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller selhal" }
 & $vpy scripts\smoke_frozen.py dist\NetMonitor\NetMonitor.exe
 if ($LASTEXITCODE -ne 0) { throw "Spuštění sestavené aplikace selhalo" }
 
-$zip = "dist\NetMonitor-1.4.2-win64.zip"
+$zip = "dist\NetMonitor-1.4.3-win64.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path dist\NetMonitor\* -DestinationPath $zip
 Write-Host "==> Přenosná verze: dist\NetMonitor\NetMonitor.exe  |  $zip" -ForegroundColor Green
@@ -70,7 +70,7 @@ if (-not $NoInstaller) {
     $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
               "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($iscc) {
-        $installer = "dist\NetMonitor-1.4.2-setup.exe"
+        $installer = "dist\NetMonitor-1.4.3-setup.exe"
         & $iscc packaging\windows\netmonitor.iss
         if ($LASTEXITCODE -ne 0) { throw "Inno Setup selhal (kód $LASTEXITCODE)" }
         if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Instalátor nebyl vytvořen: $installer" }

@@ -6,7 +6,7 @@
 # Podpis a notarizace: viz docs/DISTRIBUTION.md (vyžaduje Apple Developer ID – nelze provést bez účtu).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VER=1.4.2
+VER=1.4.3
 SKIP_TESTS=0; DMG=0; ICONS=0
 for a in "$@"; do case "$a" in --skip-tests) SKIP_TESTS=1;; --dmg) DMG=1;; --icons) ICONS=1;; esac; done
 
