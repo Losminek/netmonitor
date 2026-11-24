@@ -54,9 +54,11 @@ def test_corrupt_index_is_not_silently_overwritten(tmp_path):
     root.mkdir()
     (root / "profile-index.json").write_text('{"profiles": [], "active": "bad"}', encoding="utf-8")
     store = ProfileStore(root)
-    with pytest.raises(ValueError):
-        store.initialize(AppConfig.from_dict({}))
-    assert json.loads((root / "profile-index.json").read_text())["active"] == "bad"
+    store.initialize(AppConfig.from_dict({}))
+    backups = list(root.glob("profile-index.json.bad-*"))
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text())["active"] == "bad"
+    assert store.record(store.active_id())["name"] == "Obnovené aktuální nastavení"
 
 
 def test_invalid_profile_id_cannot_escape_store(tmp_path):

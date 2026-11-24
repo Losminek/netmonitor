@@ -164,7 +164,7 @@ class SyncService(QObject):
         if not self.logged_in:
             return "jen v tomto počítači" if not record.get("remote_id") else "uloženo na serveru (nepřihlášeno)"
         if record.get("local_only"):
-            return "jen místní (na serveru smazán)"
+            return "jen místní (obnovený profil)" if record.get("recovered") else "jen místní (na serveru smazán)"
         if record.get("remote_id"):
             if (record.get("remote_account"), record.get("remote_server")) != (self.account, self.client.base_url):
                 return "patří k jinému účtu"
