@@ -15,6 +15,7 @@ from ..core.config import PingTarget
 from ..core.ping_engine import Resolver, ping_host
 from . import theme
 from .ping_panel import fmt_rtt
+from .widgets import show_dialog
 
 log = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ def open_traceroute(ctrl, target: PingTarget) -> TracerouteDialog:
         d.deleteLater()                        # GUI vlákno, proces i worker už skončily
 
     d.finished.connect(release)
-    d.show()
+    show_dialog(d)
     d.start()
     return d
 
