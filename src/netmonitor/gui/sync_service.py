@@ -8,7 +8,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Callable
 
@@ -37,8 +39,12 @@ def _safe(fn: Callable[[], object]) -> Callable[[], _Result]:
         except SyncError as exc:
             return _Result(exc)
         except Exception as exc:  # noqa: BLE001 – dokončení musí proběhnout i při neočekávané chybě
-            # Text výjimky i traceback mohou obsahovat heslo, token nebo tělo odpovědi.
+            # Text výjimky a zdrojové řádky mohou obsahovat heslo, token nebo tělo odpovědi.
             log.error("Neočekávaná chyba synchronizace (%s)", type(exc).__name__)
+            frames = traceback.extract_tb(exc.__traceback__)
+            log.debug("Místa chyby synchronizace:\n%s",
+                      "".join(f"  {os.path.basename(frame.filename)}:{frame.lineno} in {frame.name}\n"
+                              for frame in frames))
             return _Result(SyncError("Při komunikaci se serverem došlo k neočekávané chybě. "
                                      "Zkuste to prosím znovu."))
     return call
@@ -54,7 +60,14 @@ class SyncService(QObject):
         self.secrets = SecretStore()
         self._settings_path = config_dir() / SETTINGS_FILE
         self.settings = self._load_settings()
-        self.client = self._make_client(self.settings["server"])
+        self._server_override = os.environ.get("NETMONITOR_SYNC_URL", "")
+        if self._server_override:
+            try:
+                self._server_override = SyncClient(self._server_override).base_url
+            except ValueError:
+                self._server_override = ""      # neplatná vývojová URL nezmění uložený server
+        self._tokens_lock = threading.RLock()  # jen změny relace a soubor tokenu, nikdy síť
+        self.client = self._make_client(self._server_override or self.settings["server"])
         self.status = "Nepřihlášeno – profily jsou uložené jen v tomto počítači."
         self.last_sync: float | None = None
         self.busy = False
@@ -73,7 +86,7 @@ class SyncService(QObject):
 
     # ------------------------------------------------------------------ nastavení
     def _load_settings(self) -> dict:
-        data = {"server": os.environ.get("NETMONITOR_SYNC_URL", DEFAULT_SERVER), "email": ""}
+        data = {"server": DEFAULT_SERVER, "email": ""}
         try:
             with self._settings_path.open(encoding="utf-8") as f:
                 stored = json.load(f)
@@ -96,11 +109,22 @@ class SyncService(QObject):
         except ValueError:
             client = SyncClient(DEFAULT_SERVER)
             self.settings["server"] = DEFAULT_SERVER
-        client.on_tokens = self._tokens_changed
+
+        def tokens_changed(refresh):
+            with self._tokens_lock:
+                if client is self.client:
+                    self._tokens_changed(refresh)
+
+        client.on_tokens = tokens_changed
         return client
 
     def set_server(self, server: str) -> None:
-        """Změna serveru odhlásí. Vyhazuje ValueError u neplatné adresy."""
+        """Změna serveru odhlásí. Vývojové přepsání má přednost a nikdy se neukládá.
+
+        Bez přepsání vyhazuje ValueError u neplatné adresy.
+        """
+        if self._server_override:
+            return
         server = server.strip().rstrip("/")
         if server == self.client.base_url:
             return
@@ -203,13 +227,8 @@ class SyncService(QObject):
         def done(result):
             if gen != self._resume_gen:
                 # Mezitím odhlášeno: obnova na pozadí mohla klientovi vrátit tokeny – relaci ukončit
-                # i na serveru a tokeny znovu zahodit (tokeny uložené během obnovy smaže secrets.clear()).
-                if client.access_token and not self.ctrl._stopping:
-                    old = SyncClient(client.base_url, access_token=client.access_token)
-                    self.ctrl._run_bg("sync-logout-late", old.logout, lambda _r: None)
-                client.access_token = client.refresh_token = client.user = None
-                client.mfa = False
-                self.secrets.clear()
+                # i na serveru a tokeny zahodit. Callback odpojeného klienta už soubor nezmění.
+                self._logout_late(client)
                 return
             if isinstance(result, Exception):
                 self._resume_pending = self._transient(result) and bool(self.client.refresh_token)
@@ -271,14 +290,34 @@ class SyncService(QObject):
             # Relaci na serveru ukončí samostatný klient; ten hlavní se vyprázdní hned.
             old = SyncClient(client.base_url, access_token=client.access_token)
             self.ctrl._run_bg("sync-logout", old.logout, lambda _r: None)
+        with self._tokens_lock:
+            # Na síťový zámek klienta v GUI nečekat. Pozdní obnova zůstane ve starém
+            # klientovi a její callback už nemůže uložit token ani smazat novou relaci.
+            self.client = self._make_client(client.base_url)
+            client.access_token = client.refresh_token = client.user = None
+            client.mfa = False
+            self.secrets.clear()
+        self._set_status("Odhlášeno – profily zůstávají v tomto počítači.")
+
+    def _logout_late(self, client: SyncClient) -> None:
+        """Zahodí pozdní tokeny odpojeného klienta a ukončí jeho relaci i na serveru."""
+        if client is self.client:
+            return
+        if client.access_token and not self.ctrl._stopping:
+            old = SyncClient(client.base_url, access_token=client.access_token)
+            self.ctrl._run_bg("sync-logout-late", old.logout, lambda _r: None)
         client.access_token = client.refresh_token = client.user = None
         client.mfa = False
-        self.secrets.clear()
-        self._set_status("Odhlášeno – profily zůstávají v tomto počítači.")
 
     def run(self, key: str, fn: Callable[[], object], done: Callable[[object], None]) -> None:
         """Obecný požadavek na server na pozadí (správa klíčů, 2FA…). done dostane výsledek nebo výjimku."""
-        self.ctrl._run_bg("sync-x-" + key, _safe(fn), lambda result: done(result.value))
+        client = self.client
+
+        def finished(result):
+            self._logout_late(client)
+            done(result.value)
+
+        self.ctrl._run_bg("sync-x-" + key, _safe(fn), finished)
 
     # ------------------------------------------------------------------ synchronizace
     def _local_change(self, *_args) -> None:
@@ -313,10 +352,21 @@ class SyncService(QObject):
             return
         resolutions, self._resolutions = self._resolutions, {}
         client = self.client
-        self._job("run", lambda: sync_engine.run(client, snap, resolutions),
-                  lambda result: self._finished(snap, result))
+
+        def done(result):
+            if client is not self.client:
+                self._logout_late(client)
+                self._again = False
+                self.changed.emit()            # starý výsledek nepatří ani nové relaci téhož účtu
+                return
+            self._finished(snap, result)
+
+        self._job("run", lambda: sync_engine.run(client, snap, resolutions), done)
 
     def _finished(self, snap, result) -> None:
+        # Po chybě počkáme na další ruční/periodický běh; trvalý výpadek nesmí
+        # založit rychlé opakování. Nový běh vždy načte aktuální místní změny.
+        again, self._again = self._again, False
         store = self.ctrl.profile_store
         if isinstance(result, SyncError) and result.status == 401 and not self.client.logged_in:
             self._periodic.stop()
@@ -354,6 +404,5 @@ class SyncService(QObject):
         self._asked.update((a.local_id, (a.remote or {}).get("revision")) for a in fresh)
         if fresh:
             self.conflicts_found.emit(fresh)
-        if self._again or (out.changed and any(a.kind == "fork" for a in result)):
-            self._again = False
+        if again or (out.changed and any(a.kind == "fork" for a in result)):
             QTimer.singleShot(0, self.sync_now)
