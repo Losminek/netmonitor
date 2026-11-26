@@ -8,7 +8,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QCoreApplication  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from netmonitor.core.config import AppConfig, PingTarget  # noqa: E402
+from netmonitor.core.config import AppConfig, PingTarget, WolDevice  # noqa: E402
 
 from .fakes import FakePinger  # noqa: E402
 
@@ -82,13 +82,14 @@ def ctrl(qapp, tmp_path, monkeypatch):
     c.shutdown()
 
 
-@pytest.mark.parametrize("kind", ["history", "ipconfig", "update", "traceroute"])
+@pytest.mark.parametrize("kind", ["history", "ipconfig", "update", "traceroute", "wol", "wol_devices"])
 def test_dialog_entry_points_use_activation(ctrl, monkeypatch, kind):
     """Regrese L29: vlastní otevírací metody dialogů používají společnou aktivaci."""
     from netmonitor.gui import history_dialog, ipconfig_dialog, tools_dialog, updater_ui
     from netmonitor.gui.widgets import show_dialog
 
     opened = []
+    widget = None
 
     def activate(dialog):
         opened.append(dialog)
@@ -106,11 +107,24 @@ def test_dialog_entry_points_use_activation(ctrl, monkeypatch, kind):
         module = updater_ui
         d = updater_ui.UpdateDialog(updater_ui.UpdateManager(ctrl))
         open_dialog = d.open_for
-    else:
+    elif kind == "traceroute":
         module = tools_dialog
         monkeypatch.setattr(tools_dialog.TracerouteDialog, "start", lambda _self: None)
         target = PingTarget(name="Test", host="192.0.2.1")
         open_dialog = lambda: tools_dialog.open_traceroute(ctrl, target)
+    elif kind == "wol":
+        # Regrese L35: stav WoL z tray (nový i znovu vyvolaný dialog) se aktivuje stejně jako ostatní.
+        module = tools_dialog
+        monkeypatch.setattr(tools_dialog.WolDialog, "start", lambda _self: None)
+        monkeypatch.setattr(tools_dialog.WolDialog, "busy", lambda _self: True)
+        device = WolDevice(name="Test", mac="02:00:00:00:00:01", id="w")
+        open_dialog = lambda: tools_dialog.wake(ctrl, device)
+    else:
+        # Regrese L35: seznam zařízení WoL z menu widgetu/tray.
+        from netmonitor.gui import main_widget
+        module = main_widget
+        widget = main_widget.MainWidget(ctrl)
+        open_dialog = widget.open_wol_devices
     monkeypatch.setattr(module, "show_dialog", activate)
     try:
         open_dialog()
@@ -125,6 +139,11 @@ def test_dialog_entry_points_use_activation(ctrl, monkeypatch, kind):
             if kind == "traceroute" and dialog in tools_dialog._trace_dialogs:
                 tools_dialog._trace_dialogs.remove(dialog)
                 dialog.deleteLater()
+            elif kind == "wol" and dialog in tools_dialog._wol_dialogs:
+                tools_dialog._wol_dialogs.remove(dialog)
+                dialog.deleteLater()
+        if widget is not None:
+            widget.close()
 
 
 def test_widget_shows_real_measurements(ctrl):
