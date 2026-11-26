@@ -1,5 +1,10 @@
 # Změny
 
+## 1.4.4
+- Linux: název Wi-Fi s diakritikou se při čtení přes `iw` zobrazí správně a vazba profilu na síť funguje i bez odpovědi NetworkManageru.
+- Linux: rozpoznání kabelové sítě pro přepnutí profilu bere MAC brány z aktivního rozhraní.
+- Opravy od Daniela Lošáka (#41–#43).
+
 ## 1.4.3
 - **Wake-on-LAN – seznam zařízení**: zařízení k probuzení se ukládají zvlášť, nemusí být mezi ping cíli. Pravé tlačítko na widgetu nebo na ikoně v liště → Probudit zařízení… nebo Uložená zařízení WoL. Ověření probuzení funguje i u vypnutých cílů a zjištění MAC adresy nezamrazí okno.
 - **Nové instalace** začínají s neutrálními výchozími ping cíli. Stávající nastavení se nemění.
