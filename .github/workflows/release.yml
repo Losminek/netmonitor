@@ -1,7 +1,7 @@
 # Sestavení a vydání NetMonitoru pro Windows, Linux a macOS (Intel i Apple Silicon).
 # Spuštění:
 #   a) push na main se zvýšenou verzí v src/netmonitor/__init__.py => release v<verze> se založí sám
-#      (poznámky z CHANGELOG.md); pokud release té verze už existuje, nic se nevydává
+#      (poznámky z CHANGELOG.md); pokud release té verze už existuje, doplní se chybějící platformy z commitu tagu
 #   b) vytvořením release / tagu "v*" na GitHubu
 #   c) ručně: Actions → Build & Release → Run workflow → zadat existující tag (např. v1.0.1)
 # Každý build nahraje své soubory PŘÍMO do release – nepoužívá Actions artefakty
@@ -94,6 +94,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: env.DO_BUILD == 'true'
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
       - uses: actions/setup-python@v6
         if: env.DO_BUILD == 'true'
         with:
