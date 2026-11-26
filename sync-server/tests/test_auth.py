@@ -368,3 +368,42 @@ def test_changed_jwt_secret_gives_clear_error_and_totp_key_keeps_2fa(tmp_path):
     assert r.status_code == 503 and r.json()["detail"]["code"] == "totp_unavailable"
     kept = TestClient(create_app(make_settings(database_url=url, jwt_secret="w" * 48, totp_key="x" * 48)))
     assert login(kept, "user@example.org", secret=secret).status_code == 200
+
+
+def test_new_totp_key_on_existing_install_reads_old_secret_and_reseals(tmp_path):
+    """Nový TOTP_KEY u instalace, kde je 2FA šifrované JWT_SECRET: přihlášení projde a tajemství se přešifruje."""
+    from app.models import User
+    url = f"sqlite:///{tmp_path / 'db.sqlite3'}"
+    old = create_app(make_settings(database_url=url))                       # JWT_SECRET = "x"*48
+    secret = add_user(old, "user@example.org", totp=True)
+    with_key = create_app(make_settings(database_url=url, totp_key="k" * 48))
+    assert login(TestClient(with_key), "user@example.org", secret=secret).status_code == 200
+    with with_key.state.session_factory() as db:
+        stored = db.scalar(select(User.totp_secret).where(User.email == "user@example.org"))
+    assert security.unseal("k" * 48, stored) == secret                       # už šifrováno TOTP_KEY
+    # Teď lze JWT_SECRET změnit, 2FA zůstane funkční.
+    rotated = TestClient(create_app(make_settings(database_url=url, jwt_secret="z" * 48, totp_key="k" * 48)))
+    r = rotated.post("/auth/login", json={"email": "user@example.org", "password": PASSWORD,
+                                          "totp_code": code(secret, 1)})
+    assert r.status_code == 200
+
+
+def test_non_ascii_input_is_rejected_not_server_error(app, client):
+    secret = add_user(app, "user@example.org", totp=True)
+    real = login(client, "user@example.org", secret=secret).json()["refresh_token"]
+    sid = real.split(".")[0]
+    for forged in (f"{sid}.abc.Ž", f"{sid}.é.ř"):
+        assert client.post("/auth/refresh", json={"refresh_token": forged}).status_code == 401
+    r = client.post("/auth/login", json={"email": "user@example.org", "password": PASSWORD,
+                                         "totp_code": "١٢٣٤٥٦"})                  # arabské číslice
+    assert r.status_code == 401
+    assert client.post("/auth/refresh", json={"refresh_token": real}).status_code == 200
+
+
+def test_totp_setup_is_rate_limited(tmp_path):
+    app = create_app(make_settings(rate_login=(3, 300)))
+    client = TestClient(app)
+    add_user(app, "user@example.org")
+    r = login(client, "user@example.org")
+    codes = [client.post("/auth/totp/setup", json={}, headers=bearer(r)).status_code for _ in range(4)]
+    assert codes[:2] == [200, 200] and codes[-1] == 429

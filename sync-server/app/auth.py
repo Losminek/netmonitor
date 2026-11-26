@@ -173,8 +173,9 @@ def login(body: LoginBody, request: Request, db: Session = Depends(get_db)):
 
 def consume_totp(request: Request, db: Session, user: User, code: str) -> bool:
     """Ověří kód a atomicky jej spotřebuje – stejný kód nelze použít dvakrát ani souběžně."""
+    settings = request.app.state.settings
     try:
-        secret = security.unseal(request.app.state.settings.seal_key, user.totp_secret)
+        secret, key_index = security.unseal_any(settings.unseal_keys, user.totp_secret)
     except RuntimeError:
         log.error("Tajemství 2FA účtu %s nelze dešifrovat (změněný JWT_SECRET/TOTP_KEY?).", user.id)
         raise error(503, "totp_unavailable", "Dvoufázové ověření teď na serveru nejde ověřit. "
@@ -182,8 +183,11 @@ def consume_totp(request: Request, db: Session, user: User, code: str) -> bool:
     step = security.totp_verify(secret, code, user.totp_last_step) if secret else None
     if step is None:
         return False
+    values = {"totp_last_step": step}
+    if key_index:                          # zašifrováno dřívějším klíčem (JWT_SECRET) → přešifrovat TOTP_KEY
+        values["totp_secret"] = security.seal(settings.seal_key, secret)
     taken = db.execute(update(User).where(User.id == user.id, User.totp_last_step < step)
-                       .values(totp_last_step=step))
+                       .values(**values))
     db.commit()
     return taken.rowcount == 1
 
@@ -272,6 +276,7 @@ def _no_web_enrollment_for_admin(user: User) -> None:
 
 @router.post("/totp/setup")
 def totp_setup(request: Request, auth: Auth = Depends(current_auth), db: Session = Depends(get_db)):
+    limit(request, "login", request.app.state.settings.rate_login)
     _no_web_enrollment_for_admin(auth.user)
     if auth.user.totp_enabled:
         raise error(409, "totp_already_enabled", "Dvoufázové ověření je už zapnuté.")

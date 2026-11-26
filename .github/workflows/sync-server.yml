@@ -37,6 +37,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci-only-password
           JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-secret
+          FORWARDED_ALLOW_IPS: 127.0.0.1
           TAG: ci
         run: |
           set -euo pipefail
@@ -67,6 +68,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci-only-password
           JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-secret
+          FORWARDED_ALLOW_IPS: 127.0.0.1
         run: |
           set -euo pipefail
           api=http://127.0.0.1:8766

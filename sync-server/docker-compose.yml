@@ -2,8 +2,9 @@
 # Hodnoty zadejte v části „Environment variables“:
 #   POSTGRES_PASSWORD   dlouhé náhodné heslo databáze      (openssl rand -hex 24)
 #   JWT_SECRET          podpisový klíč, min. 32 znaků       (openssl rand -hex 32)
+#   FORWARDED_ALLOW_IPS IP kontejneru NPM (+ rozsahy Cloudflare); bez proxy 127.0.0.1
 # Volitelné: TAG (výchozí pevná verze níže), API_BIND (výchozí 127.0.0.1:8766), PROXY_NETWORK,
-#   FORWARDED_ALLOW_IPS (IP kontejneru NPM + rozsahy Cloudflare), TOTP_KEY, REGISTRATION_ENABLED.
+#   TOTP_KEY, REGISTRATION_ENABLED.
 name: netmonitor-sync
 
 services:
@@ -24,7 +25,7 @@ services:
       retries: 10
 
   api:
-    image: ghcr.io/mersl77/netmonitor-sync:${TAG:-1.2.1}
+    image: ghcr.io/mersl77/netmonitor-sync:${TAG:-1.2.2}
     restart: unless-stopped
     depends_on:
       db:
@@ -38,9 +39,10 @@ services:
       REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
       # Komu věřit hlavičku X-Forwarded-For: IP kontejneru reverzní proxy (NPM) a při provozu přes
       # Cloudflare i jeho rozsahy (https://www.cloudflare.com/ips/). Celou síť 172.16.0.0/12 nezadávejte:
-      # hlavičku by pak mohl podvrhnout kterýkoli kontejner i proces na hostu. Bez nastavení se nevěří
-      # nikomu a všichni klienti sdílejí limit podle IP proxy.
-      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # hlavičku by pak mohl podvrhnout kterýkoli kontejner i proces na hostu. Bez důvěry k proxy by všichni
+      # klienti sdíleli limity podle její IP (pár chybných hesel by zamklo komukoli účet), proto je hodnota
+      # povinná. Bez reverzní proxy zadejte 127.0.0.1.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?Nastavte FORWARDED_ALLOW_IPS (IP kontejneru NPM, viz README)}
       TOTP_KEY: ${TOTP_KEY:-}
       ADMIN_MFA_HOURS: ${ADMIN_MFA_HOURS:-12}
     ports:

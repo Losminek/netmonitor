@@ -14,7 +14,7 @@ Image: `ghcr.io/mersl77/netmonitor-sync` (sestavuje GitHub Actions z této slož
 | Zaplavení požadavky | limit na IP: 240 požadavků/min celkem, 10 přihlášení/5 min, 5 registrací/hod (HTTP 429) |
 | Hádání hesla | Argon2id; po 5 chybných pokusech z jedné IP na jeden e-mail pauza 15 min (stejná odpověď pro existující i neexistující účet) |
 | Správce | správa jen s kódem z autentikátoru zadaným za posledních 12 h (`ADMIN_MFA_HOURS`); 2FA správce se zapíná jen na serveru |
-| Tajemství 2FA | v databázi šifrovaná klíčem odvozeným z `JWT_SECRET` |
+| Tajemství 2FA | v databázi šifrovaná klíčem odvozeným z `TOTP_KEY` (není-li zadaný, z `JWT_SECRET`) |
 | Relace | přístupový token 15 min, obnovovací token se při každém použití vymění; použití staršího tokenu relaci ukončí (krátká tolerance pro ztracenou odpověď) |
 | Data | profil vidí jen jeho účet (ani správce ne); max. 20 profilů na účet, 512 KiB na profil |
 | Souběh | zápis i smazání profilu kontrolují revizi; konflikt = HTTP 409, nic se nepřepíše |
@@ -27,7 +27,7 @@ Takto je nasazen `sync.zelina.eu` (složka `/opt/netmonitor-sync-v2`):
 ( set -e
 mkdir -p /opt/netmonitor-sync-v2 && cd /opt/netmonitor-sync-v2
 curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/mersl77/netmonitor/main/sync-server/docker-compose.yml
-if [ ! -f .env ]; then printf 'POSTGRES_PASSWORD=%s\nJWT_SECRET=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 32)" > .env; fi
+if [ ! -f .env ]; then printf 'POSTGRES_PASSWORD=%s\nJWT_SECRET=%s\nFORWARDED_ALLOW_IPS=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 32)" "$(docker inspect -f '{{with index .NetworkSettings.Networks "nginx-proxy-manager_default"}}{{.IPAddress}}{{end}}' nginx-proxy-manager)" > .env; fi
 chmod 600 .env
 docker compose up -d --wait
 curl -s http://127.0.0.1:8766/health )
@@ -36,8 +36,10 @@ docker compose exec api python -m app.cli create-admin      # zeptá se na e-mai
 
 Aktualizace serveru: stáhnout nový `docker-compose.yml` (obsahuje pevnou verzi image) a
 `docker compose up -d --wait`. Databáze se při startu sama doplní o nové sloupce.
+Od 1.2.2 je `FORWARDED_ALLOW_IPS` povinný: bez něj stack nenaběhne (viz níže).
 
-**Za reverzní proxy** musí `FORWARDED_ALLOW_IPS` v `.env` obsahovat IP kontejneru NPM a za Cloudflare
+**`FORWARDED_ALLOW_IPS` (povinné).** Bez reverzní proxy zadejte `127.0.0.1`.
+Za reverzní proxy musí obsahovat IP kontejneru NPM a za Cloudflare
 i jeho rozsahy (<https://www.cloudflare.com/ips/>), čárkami oddělené. Ne celou síť `172.16.0.0/12`:
 hlavičku `X-Forwarded-For` by pak mohl podvrhnout kterýkoli kontejner v síti i proces na hostu
 (přes publikovaný port). IP kontejneru NPM zjistíte příkazem
@@ -115,9 +117,13 @@ JWT_SECRET=$(openssl rand -hex 32) DATABASE_URL=sqlite:///dev.sqlite3 uvicorn ap
 
 - Limit požadavků je v paměti jednoho procesu (po restartu kontejneru se nuluje).
 - Schéma vzniká přes `create_all` a nové sloupce doplňuje `upgrade_schema` při startu; Alembic zatím není.
-- Změna `JWT_SECRET` odhlásí všechny. Tajemství 2FA jsou šifrovaná klíčem `TOTP_KEY`, a když není
-  zadaný, klíčem `JWT_SECRET`. Při změně `JWT_SECRET` bez `TOTP_KEY` proto nastavte `TOTP_KEY` na
-  původní `JWT_SECRET`, jinak se nepřihlásí **žádný** uživatel s 2FA (server vrátí 503
-  `totp_unavailable`) a každému je nutné spustit `reset-totp`.
+- Změna `JWT_SECRET` zneplatní jen přístupové tokeny (15 min); aplikace se obnovovacím tokenem sama
+  přihlásí znovu, relace zůstávají. Odhlásit uživatele lze příkazem `reset-password` (ukončí jeho
+  relace), zablokováním účtu nebo odhlášením zařízení v kartě Správa.
+- Tajemství 2FA jsou šifrovaná klíčem `TOTP_KEY`, a když není zadaný, klíčem `JWT_SECRET`. Server je
+  čte nejdřív `TOTP_KEY` a pak `JWT_SECRET` a při přihlášení je přešifruje na `TOTP_KEY`. Přidat nový
+  `TOTP_KEY` k stávající instalaci je tedy bezpečné, ale **`JWT_SECRET` neměňte, dokud se všichni
+  uživatelé s 2FA aspoň jednou nepřihlásí** – jinak dostanou 503 `totp_unavailable` a je nutné
+  `reset-totp`. Nejjednodušší je při změně `JWT_SECRET` nastavit `TOTP_KEY` na jeho původní hodnotu.
 - Obnova zapomenutého hesla e-mailem není – heslo resetuje správce příkazem `reset-password`.
 - Zálohování databáze (pg_dump svazku) si řeší správce serveru.

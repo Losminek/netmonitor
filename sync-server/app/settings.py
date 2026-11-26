@@ -47,6 +47,11 @@ class Settings:
         """Klíč pro tajemství 2FA. Samostatný TOTP_KEY dovolí změnit JWT_SECRET bez ztráty 2FA."""
         return self.totp_key or self.jwt_secret
 
+    @property
+    def unseal_keys(self) -> tuple[str, ...]:
+        """Klíče pro čtení tajemství 2FA: nejdřív aktuální, pak JWT_SECRET (hodnoty z doby před TOTP_KEY)."""
+        return tuple(dict.fromkeys((self.seal_key, self.jwt_secret)))
+
 
 def load() -> Settings:
     secret = _secret("JWT_SECRET")
