@@ -53,3 +53,25 @@ def test_wifi_ssid_iw_invalid_utf8(monkeypatch, escaped, expected):
                         f"\tSSID: {escaped}\n" if args[0] == "iw" else None)
     monkeypatch.setattr(linux.Path, "read_text", lambda self: "")
     assert linux.wifi_info("wlan0")["ssid"] == expected
+
+
+@pytest.mark.parametrize("suffix", ["", " "])
+@pytest.mark.parametrize("nmcli_ssid", [None, "Kancelar 2"])
+def test_wifi_ssid_iw_empty(monkeypatch, suffix, nmcli_ssid):
+    """Regrese L52: prázdné SSID nesmí převzít další řádek ani přepsat nmcli."""
+    iw_output = (
+        "Connected to 02:00:00:00:00:01 (on wlan0)\n"
+        f"\tSSID:{suffix}\n\tfreq: 2412.0\n"
+        "\tsignal: -56 dBm\n\ttx bitrate: 270.0 MBit/s\n"
+    )
+    nmcli_output = f"yes:{nmcli_ssid}:72::wlan0\n" if nmcli_ssid else None
+    mock_run = Mock(side_effect=[nmcli_output, iw_output])
+    monkeypatch.setattr(linux, "run_cmd", mock_run)
+    monkeypatch.setattr(linux.Path, "read_text", lambda self: "")
+
+    info = linux.wifi_info("wlan0")
+
+    mock_run.assert_called_with(["iw", "dev", "wlan0", "link"], timeout=2)
+    assert info["ssid"] == nmcli_ssid
+    assert info["signal_dbm"] == -56
+    assert info["rate_mbps"] == 270.0

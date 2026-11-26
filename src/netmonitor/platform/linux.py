@@ -178,9 +178,9 @@ def wifi_info(iface: str) -> dict:
     if info["ssid"] is None or info["rate_mbps"] is None:
         out = run_cmd(["iw", "dev", iface, "link"], timeout=2)
         if out:
-            m = re.search(r"^\s*SSID:\s*(.+)$", out, re.M)
+            m = re.search(r"^[ \t]*SSID:[ \t]*(.*)$", out, re.M)
             if m and not info["ssid"]:
-                info["ssid"] = _iw_unescape_ssid(m.group(1).strip())
+                info["ssid"] = _iw_unescape_ssid(m.group(1).strip()) or None
             m = re.search(r"signal:\s*(-?\d+)\s*dBm", out)
             if m:
                 info["signal_dbm"] = int(m.group(1))
