@@ -53,7 +53,8 @@ def _refresh_mac(server_secret: str, body: str) -> str:
 def refresh_token_issued(server_secret: str, token: str) -> bool:
     """True, pokud token nese platný podpis serveru (tokeny do 1.2.0 podpis nemají)."""
     body, sep, mac = token.rpartition(".")
-    return bool(sep) and body.count(".") == 1 and hmac.compare_digest(mac, _refresh_mac(server_secret, body))
+    return (bool(sep) and body.count(".") == 1
+            and hmac.compare_digest(mac.encode("utf-8", "replace"), _refresh_mac(server_secret, body).encode("ascii")))
 
 
 def refresh_session_id(token: str):
@@ -105,7 +106,7 @@ def totp_code(secret: str, step: int) -> str:
 
 def totp_verify(secret: str, code: str, last_step: int = 0, at: float | None = None) -> int | None:
     """Vrátí časový krok platného kódu (±1 krok = ±30 s), jinak None. Každý krok lze použít jen jednou."""
-    code = "".join(ch for ch in str(code) if ch.isdigit())
+    code = "".join(ch for ch in str(code) if ch in "0123456789")      # jen ASCII číslice
     if len(code) != 6:
         return None
     current = int((time.time() if at is None else at) // 30)
@@ -138,14 +139,22 @@ def seal(server_secret: str, value: str) -> str:
 
 def unseal(server_secret: str, value: str | None) -> str | None:
     """Vrátí tajemství v čitelné podobě. Hodnoty z 1.0.0 (nešifrované) projdou beze změny."""
+    return unseal_any((server_secret,), value)[0]
+
+
+def unseal_any(keys, value: str | None) -> tuple[str | None, int]:
+    """Zkusí klíče v pořadí; vrátí (tajemství, index použitého klíče). Index > 0 = přešifrovat."""
     if not value or not value.startswith(_SEALED):
-        return value
+        return value, 0
     from cryptography.fernet import InvalidToken
-    try:
-        return _fernet(server_secret).decrypt(value[len(_SEALED):].encode("ascii")).decode("ascii")
-    except InvalidToken as exc:
-        raise RuntimeError("Tajemství TOTP nelze dešifrovat – změnil se JWT_SECRET? "
-                           "Pomůže `python -m app.cli reset-totp <e-mail>`.") from exc
+    token = value[len(_SEALED):].encode("ascii")
+    for index, key in enumerate(keys):
+        try:
+            return _fernet(key).decrypt(token).decode("ascii"), index
+        except InvalidToken:
+            continue
+    raise RuntimeError("Tajemství TOTP nelze dešifrovat – změnil se JWT_SECRET nebo TOTP_KEY? "
+                       "Pomůže `python -m app.cli reset-totp <e-mail>`.")
 
 
 def is_sealed(value: str | None) -> bool:

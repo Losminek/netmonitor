@@ -1,5 +1,12 @@
 # NetMonitor Sync – změny
 
+## 1.2.2
+- `FORWARDED_ALLOW_IPS` je povinný; bez něj stack nenaběhne (bez reverzní proxy zadejte `127.0.0.1`).
+- Tajemství 2FA se čtou klíčem `TOTP_KEY` i `JWT_SECRET` a při přihlášení se přešifrují na `TOTP_KEY` – nový `TOTP_KEY` na stávající instalaci 2FA nerozbije.
+- Neplatné znaky v obnovovacím tokenu nebo v kódu 2FA vrací 401 místo chyby serveru.
+- Limit požadavků i na přípravu 2FA.
+- README: změna `JWT_SECRET` uživatele neodhlásí.
+
 ## 1.2.1
 - Zapnutí dvoufázového ověření vyžaduje aktuální heslo.
 - Tolerance pro ztracenou odpověď při obnově přihlášení platí pro každý token jen jednou.
