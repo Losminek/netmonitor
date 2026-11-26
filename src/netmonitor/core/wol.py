@@ -136,12 +136,19 @@ def list_neighbors() -> list[Neighbor]:
     args = ["arp", "-an"] if sys.platform == "darwin" else ["arp", "-a"]
     return parse_neighbors(run_cmd(args, timeout=3, c_locale=False) or "")
 
-def parse_arp_output(text: str, ip: str) -> str | None:
-    """Najde MAC u dané IP ve výstupu `arp -a` (Windows, libovolný jazyk) / `arp -n` (macOS) / /proc/net/arp."""
+def parse_arp_output(text: str, ip: str, iface: str | None = None) -> str | None:
+    """MAC u IP v `arp -a` (Windows, libovolný jazyk) / `arp -n` (macOS) / /proc/net/arp; iface filtruje Device."""
     for line in text.splitlines():
-        if not re.search(rf"(?<![\d.]){re.escape(ip)}(?![\d.])", line):
-            continue
-        m = _MAC_IN_TEXT.search(line)
+        fields = line.split()
+        if len(fields) >= 3 and fields[1].startswith("0x") and fields[2].startswith("0x"):
+            # /proc/net/arp: IP a rozhraní porovnáváme jen v příslušných sloupcích.
+            if len(fields) != 6 or fields[0] != ip or (iface is not None and fields[5] != iface):
+                continue
+            m = _MAC_IN_TEXT.fullmatch(fields[3])
+        else:
+            if not re.search(rf"(?<![\d.]){re.escape(ip)}(?![\d.])", line):
+                continue
+            m = _MAC_IN_TEXT.search(line)
         if m:
             try:
                 mac = parse_mac(m.group(1))
@@ -151,18 +158,21 @@ def parse_arp_output(text: str, ip: str) -> str | None:
     return None
 
 
-def arp_lookup(ip: str) -> str | None:
-    """MAC adresa IPv4 z ARP tabulky (zařízení musí být nedávno dostupné – nejdřív ho pingněte)."""
+def arp_lookup(ip: str, iface: str | None = None) -> str | None:
+    """MAC IPv4 z ARP tabulky; iface omezuje hledání na Linuxu. Zařízení musí být nedávno dostupné."""
     try:
         ipaddress.IPv4Address(ip)
     except ValueError:
         return None
     if sys.platform.startswith("linux"):
         try:
-            return parse_arp_output(Path("/proc/net/arp").read_text(), ip)
+            return parse_arp_output(Path("/proc/net/arp").read_text(), ip, iface)
         except OSError:
             pass
-        out = run_cmd(["ip", "neigh", "show", ip], timeout=3) or ""
+        args = ["ip", "neigh", "show", ip]
+        if iface is not None:
+            args += ["dev", iface]
+        out = run_cmd(args, timeout=3) or ""
         return parse_arp_output(out, ip)
     if sys.platform == "darwin":
         return parse_arp_output(run_cmd(["arp", "-n", ip], timeout=3) or "", ip)

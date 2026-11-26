@@ -108,12 +108,12 @@ def test_preset_choice_in_profiles_tab_and_cleanup_when_preset_removed(env):
 def test_network_identity():
     assert identify(None) is None
     assert identify(NetworkSnapshot(active=None)) is None
-    assert identify(snap("wifi", "Firma-WiFi"), arp=lambda ip: None) == ("wifi:Firma-WiFi", "Wi-Fi „Firma-WiFi“")
-    home = identify(snap(), arp=lambda ip: "AA:BB:CC:00:00:01")
-    work = identify(snap(), arp=lambda ip: "aa:bb:cc:00:00:02")
+    assert identify(snap("wifi", "Firma-WiFi"), arp=lambda ip, iface: None) == ("wifi:Firma-WiFi", "Wi-Fi „Firma-WiFi“")
+    home = identify(snap(), arp=lambda ip, iface: "AA:BB:CC:00:00:01")
+    work = identify(snap(), arp=lambda ip, iface: "aa:bb:cc:00:00:02")
     assert home[0] == "lan:192.168.1.1|aa:bb:cc:00:00:01" and home[0] != work[0]   # stejná IP brány, jiná síť
-    assert identify(snap(), arp=lambda ip: None) is None
-    assert identify(snap(gateway=None), arp=lambda ip: "aa:bb:cc:00:00:01") is None
+    assert identify(snap(), arp=lambda ip, iface: None) is None
+    assert identify(snap(gateway=None), arp=lambda ip, iface: "aa:bb:cc:00:00:01") is None
 
 
 def test_network_binding_is_exclusive_and_local(tmp_path):
@@ -142,8 +142,8 @@ def test_profile_is_suggested_once_per_network_change(env, monkeypatch):
     ctrl, store = env
     import netmonitor.core.network_identity as ni
     macs = {"192.168.1.1": "aa:aa:aa:00:00:01", "10.20.30.1": "bb:bb:bb:00:00:02"}
-    monkeypatch.setattr(ni, "arp_lookup", lambda ip: macs.get(ip))
-    monkeypatch.setattr(ni.identify, "__defaults__", (lambda ip: macs.get(ip),))
+    monkeypatch.setattr(ni, "arp_lookup", lambda ip, iface: macs.get(ip))
+    monkeypatch.setattr(ni.identify, "__defaults__", (lambda ip, iface: macs.get(ip),))
     home_id = store.active_id()
     work_id = store.create("Firemní", AppConfig.from_dict({}))
     suggested = []
