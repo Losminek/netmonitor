@@ -33,7 +33,7 @@ přiložte ho k hlášení chyby.
 | Příznak | Příčina / řešení |
 |---|---|
 | Všechny cíle TIMEOUT, LAN = DEGRADED „ICMP může být blokováno“ | Firewall/VPN blokuje ICMP, HTTPS funguje. Ověřte `ping 8.8.8.8` v terminálu. |
-| Linux: použita implementace `system-ping` | `ping_group_range` nepovoluje ICMP sockety: `sudo sysctl -w net.ipv4.ping_group_range='0 2147483647'` (trvale do `/etc/sysctl.d/`). Funguje i bez toho. |
+| Linux: použita implementace `system-ping` | Aplikace funguje bez změn přes systémový `ping`; volitelné `sudo sysctl -w net.ipv4.ping_group_range='0 2147483647'` povolí neprivilegované ICMP echo sockety (ne raw) všem skupinám do restartu, trvale přes soubor v `/etc/sysctl.d/` (viz [PLATFORM_NOTES](PLATFORM_NOTES.md#icmp-ping)). |
 | SSID = N/A (Windows 11) | Povolte polohu pro desktopové aplikace (viz PLATFORM_NOTES). |
 | DNS ukazuje `127.0.0.53 (lokální stub)` | systemd-resolved bez dostupných upstream údajů; `resolvectl status` ukáže skutečné servery. |
 | Widget po Win+D zmizí | Omezení Windows v režimu „Na ploše“; klik na ikonu v oznamovací oblasti jej vrátí. Alternativa: režim „Vždy navrchu“ s nižší průhledností a click-through. |

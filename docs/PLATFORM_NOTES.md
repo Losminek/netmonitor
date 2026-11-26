@@ -5,8 +5,16 @@
 | OS | Implementace | Oprávnění |
 |---|---|---|
 | Windows | `IcmpSendEcho` (iphlpapi.dll) přes ctypes | běžný uživatel, bez admin práv; IPv6 zatím přes `ping -6` |
-| Linux | ICMP `SOCK_DGRAM` socket | potřebuje `net.ipv4.ping_group_range` zahrnující GID uživatele (Ubuntu/Fedora výchozí ano). Jinak automaticky systémový `ping` (setuid/capability) |
+| Linux | ICMP `SOCK_DGRAM` socket | potřebuje `net.ipv4.ping_group_range` zahrnující GID uživatele; jinak automaticky systémový `ping` (`cap_net_raw`, případně setuid) |
 | macOS | ICMP `SOCK_DGRAM` socket | běžný uživatel |
+
+Na Ubuntu 24.04 je výchozí `ping_group_range` nastaveno na `1 0` (zakázáno), Fedora jej povoluje.
+Změna není nutná: aplikace funguje přes systémový `ping` (obvykle s `cap_net_raw` nebo setuid).
+Volitelné `sudo sysctl -w net.ipv4.ping_group_range='0 2147483647'` povolí neprivilegované ICMP echo
+sockety (`SOCK_DGRAM`, nikoli raw sockety) skupinám v zadaném rozsahu GID; `0 2147483647` znamená všem skupinám.
+Užší varianta povolí jen skupinu uživatele: `sudo sysctl -w net.ipv4.ping_group_range="$(id -g) $(id -g)"`.
+`sysctl -w` platí do restartu; pro trvalé nastavení vložte `net.ipv4.ping_group_range = 0 2147483647`
+do souboru např. `/etc/sysctl.d/90-netmonitor.conf`.
 
 Výběr probíhá automaticky při startu (ověřením pingu na 127.0.0.1); použitá implementace je vidět
 v *Nastavení → Síť → Ping*. Timeout je vždy samostatný stav, nikdy „latence 30 000 ms“.
