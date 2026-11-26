@@ -59,4 +59,4 @@ sed "s#^Exec=.*#Exec=$DEST/NetMonitor#" "$SRC/netmonitor.desktop" > "$APPS/netmo
 ln -sf "$DEST/NetMonitor" "$HOME/.local/bin/netmonitor"
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" || true
 echo "Nainstalováno do $DEST. Spusťte z menu aplikací nebo příkazem: netmonitor"
-echo "Tip: nepřivilegovaný ICMP – sudo sysctl -w net.ipv4.ping_group_range='0 2147483647' (jinak se použije systémový ping)."
+echo "Tip: ping funguje bez změn přes systémový ping; volitelně sudo sysctl -w net.ipv4.ping_group_range='0 2147483647' povolí ICMP echo sockety všem skupinám do restartu (trvale přes /etc/sysctl.d/)."

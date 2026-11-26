@@ -437,8 +437,9 @@ def select_pinger(prefer: str = "auto") -> Pinger:
         p = SocketIcmpPinger.probe()
         if p:
             return p
-        log.info("ICMP socket bez oprávnění nedostupný – použiji systémový ping "
-                 "(tip: sudo sysctl net.ipv4.ping_group_range='0 2147483647')")
+        log.info("ICMP socket bez oprávnění nedostupný – použiji systémový ping; "
+                 "volitelně na Linuxu sudo sysctl -w net.ipv4.ping_group_range='0 2147483647' "
+                 "povolí ICMP echo sockety všem skupinám do restartu (trvale přes /etc/sysctl.d/)")
     return SystemPinger()
 
 
