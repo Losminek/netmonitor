@@ -3,7 +3,7 @@
 ; (build_windows.ps1 to udělá automaticky, pokud je Inno Setup nainstalovaný)
 
 #define AppName "NetMonitor"
-#define AppVersion "1.4.3"
+#define AppVersion "1.4.4"
 #define AppExe "NetMonitor.exe"
 
 [Setup]
