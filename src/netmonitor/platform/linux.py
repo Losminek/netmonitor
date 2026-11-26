@@ -155,6 +155,13 @@ def _nm_unescape_split(line: str) -> list[str]:
     return parts
 
 
+def _iw_unescape_ssid(ssid: str) -> str:
+    """Obnoví bajty SSID z ASCII výstupu iw (print_ssid_escaped)."""
+    raw = re.sub(rb"\\x([0-9a-fA-F]{2})", lambda m: bytes([int(m.group(1), 16)]), ssid.encode("utf-8"))
+    # SSID nemusí být UTF-8; neplatné bajty nahradíme, aby čtení Wi-Fi nespadlo.
+    return raw.decode("utf-8", errors="replace")
+
+
 def wifi_info(iface: str) -> dict:
     info: dict = {"ssid": None, "signal_pct": None, "signal_dbm": None, "rate_mbps": None, "note": ""}
     out = run_cmd(["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,RATE,DEVICE", "device", "wifi", "list", "ifname", iface,
@@ -173,7 +180,7 @@ def wifi_info(iface: str) -> dict:
         if out:
             m = re.search(r"^\s*SSID:\s*(.+)$", out, re.M)
             if m and not info["ssid"]:
-                info["ssid"] = m.group(1).strip()
+                info["ssid"] = _iw_unescape_ssid(m.group(1).strip())
             m = re.search(r"signal:\s*(-?\d+)\s*dBm", out)
             if m:
                 info["signal_dbm"] = int(m.group(1))
