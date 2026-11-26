@@ -11,7 +11,7 @@ from .network_info import NetworkSnapshot
 from .wol import arp_lookup
 
 
-def identify(snap: NetworkSnapshot | None, arp: Callable[[str], str | None] = arp_lookup) -> tuple[str, str] | None:
+def identify(snap: NetworkSnapshot | None, arp: Callable[[str, str | None], str | None] = arp_lookup) -> tuple[str, str] | None:
     """(klíč, popis pro uživatele), nebo None, když síť (zatím) nejde jednoznačně určit."""
     active = snap.active if snap else None
     if active is None:
@@ -19,7 +19,7 @@ def identify(snap: NetworkSnapshot | None, arp: Callable[[str], str | None] = ar
     if active.kind == "wifi" and active.ssid:
         return "wifi:" + active.ssid, f"Wi-Fi „{active.ssid}“"
     if active.gateway:
-        mac = arp(active.gateway)
+        mac = arp(active.gateway, active.name)
         if mac:
             return f"lan:{active.gateway}|{mac.lower()}", f"síť s bránou {active.gateway}"
     return None
