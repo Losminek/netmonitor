@@ -376,7 +376,8 @@ def test_nonmodal_notice_opens_local_log(crash_log, monkeypatch, action, lang, d
         if action == "open":
             opener.assert_called_once()
             url = opener.call_args.args[0]
-            assert url.isLocalFile() and url.toLocalFile() == str(crash_log)
+            # Qt vrací na Windows cestu s „/“, proto porovnáváme Path, ne řetězce.
+            assert url.isLocalFile() and Path(url.toLocalFile()) == crash_log
         else:
             opener.assert_not_called()
         assert pending_crash() == (crash_log.stat().st_size if during_start else None)
